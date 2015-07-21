@@ -27,6 +27,7 @@ import bioannotation
 import biocodeutils
 import biothings
 import os
+import sqlite3
 import yaml
 
 def main():
@@ -35,15 +36,18 @@ def main():
     ## output file to be written
     parser.add_argument('-f', '--input_fasta', type=str, required=True, help='Protein FASTA file of source molecules' )
     parser.add_argument('-c', '--config_file', type=str, required=True, help='Configuration file for annotation' )
-    parser.add_argument('-o', '--output_file', type=str, required=True, help='Path to an output file to be created' )
+    parser.add_argument('-o', '--output_base', type=str, required=True, help='Base name/path of output files to be created' )
     args = parser.parse_args()
 
-    sources_log_fh = open("{0}.sources.log".format(args.output_file), 'wt')
+    sources_log_fh = open("{0}.sources.log".format(args.output_base), 'wt')
 
     configuration = yaml.load(open(args.config_file).read())
     check_configuration(configuration)
-    evidence = parse_evidence( configuration )
+    evidence = parse_evidence_config( configuration )
     default_product_name = configuration['general']['default_product_name']
+
+    # stores any active SQLite3 db connections
+    db_conn = dict()
 
     # this is a dict of biothings.Polypeptide objects
     polypeptides = initialize_polypeptides( sources_log_fh, args.input_fasta, default_product_name )
@@ -53,13 +57,26 @@ def main():
             raise Exception("ERROR: There is a label '{0}' in the 'order' section of the conf file that isn't present in the 'evidence' section".format(label))
 
         if evidence[label]['type'] == 'HMMer3_htab':
-            parse_hmmer3_htab(polypeptides=polypeptides, config=configuration)
+            index_label = evidence[label]['index']
+
+            if index_label in db_conn:
+                # if we already have a connection to this database, use it again
+                index_conn = db_conn[index_label]
+            else:
+                # create one
+                index_path = "{0}.{1}.sqlite3".format(args.output_base, index_label)
+                index_conn = sqlite3.connect(index_path)
+                db_conn[index_label] = index_conn
+            
+            parse_hmmer3_htab(polypeptides=polypeptides, config=configuration, index=index_conn)
         elif evidence[label]['type'] == 'RAPSearch2':
             pass
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
 
-
+    # close all db connections
+    for label in db_conn:
+        db_conn[label].close()
 
 
 def check_configuration(conf):
@@ -100,7 +117,7 @@ def initialize_polypeptides( log_fh, fasta_file, default_name ):
     
     return polypeptides
         
-def parse_evidence(conf):
+def parse_evidence_config(conf):
     """
     Parses the 'evidence' section of the annotation config file, and returns a dict where each key
     is the label of that evidence and the value is a dict of the other key/value pairs
