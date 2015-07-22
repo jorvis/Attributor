@@ -140,7 +140,6 @@ def index_hmmer3_htab(path=None, index=None):
         print("DEBUG: parsing: {0}".format(file))
         for line in open(file):
             line = line.rstrip()
-            #print("DEBUG: PARSING line: {0}".format(line))
             cols = line.split("\t")
 
             ## not sure what this is, but some lines have columns 7+ as these values:
@@ -150,11 +149,11 @@ def index_hmmer3_htab(path=None, index=None):
             qry = """
                 INSERT INTO hmm_hit (qry_id, qry_start, qry_end, hmm_accession, hmm_length, hmm_start, hmm_end, 
                                      domain_score, total_score, total_score_tc, total_score_nc, total_score_gc,
-                                     domain_score_tc, domain_score_nc, domain_score_gc)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                                     domain_score_tc, domain_score_nc, domain_score_gc, total_hit_eval, domain_hit_eval)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             # the following columns in the htab files are nullable, which are filled with various widths of '-' characters
-            for i in (6,7,8,9,11):
+            for i in (6,7,8,9,11,19,20):
                 if '--' in cols[i]:
                     cols[i] = None
                 elif len(cols[i]) > 0:
@@ -167,7 +166,7 @@ def index_hmmer3_htab(path=None, index=None):
                 
             curs.execute(qry, (cols[5], cols[8], cols[9], cols[0], int(cols[2]), cols[6], cols[7], 
                                cols[11], float(cols[12]), float(cols[17]), float(cols[18]), float(cols[23]),
-                               float(cols[21]), float(cols[22]), float(cols[24])))
+                               float(cols[21]), float(cols[22]), float(cols[24]), cols[19], cols[20]))
 
     curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
     curs.close()
@@ -223,9 +222,11 @@ def initialize_hmm_results_db(conn):
             total_score_tc    real,
             total_score_nc    real,
             total_score_gc    real,
+            total_hit_eval    real,
             domain_score_tc   real,
             domain_score_nc   real,
-            domain_score_gc   real
+            domain_score_gc   real,
+            domain_hit_eval   real
         )
     """)
 
