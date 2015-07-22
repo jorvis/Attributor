@@ -59,21 +59,18 @@ def main():
         if evidence[label]['type'] == 'HMMer3_htab':
             index_label = evidence[label]['index']
 
-            ## handle the connection to the index
+            # Use any existing index connection, else attach to it.
             if index_label in db_conn:
-                # if we already have a connection to this database, use it again
                 index_conn = db_conn[index_label]
             else:
-                # create one
                 index_conn = sqlite3.connect(configuration['indexes'][index_label])
                 db_conn[index_label] = index_conn
                 
-            ## handle the connection to the evidence db
+            # Attach to or create an HMM evidence database
             hmm_ev_db_path = "{0}.hmm_ev.sqlite3".format(args.output_base)
             if os.path.exists(hmm_ev_db_path):
                 hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
             else:
-                ## initialize an HMM evidence database
                 hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
                 initialize_hmm_results_db(hmm_ev_db_conn)
 
@@ -176,35 +173,6 @@ def index_hmmer3_htab(path=None, index=None):
         
         
 def initialize_hmm_results_db(conn):
-    """
-    HTAB:
-    col  perl-col   description
-    1      [0]      HMM accession
-    2      [1]      Date search was run (if available), otherwise date of htab parse
-    3      [2]      Length of the HMM (not populated if -s is used)
-    4      [3]      Search program
-    5      [4]      Database file path
-    6      [5]      Sequence accession
-    7      [6]      Alignment start position on HMM match - hmm-f
-    8      [7]      Alignment end position on HMM match - hmm-t
-    9      [8]      Alignment start position on sequence - seq-f
-    10     [9]      Alignment end position on sequence - seq-t
-    11     [10]     frame (only populated if --frames search is run on nucleotide sequence)
-    12     [11]     Domain score
-    13     [12]     Total score
-    14     [13]     Index of domain hit
-    15     [14]
-    16     [15]     HMM description (may be truncated by hmmsearch or hmmpfam if -s is used)
-    17     [16]     Sequence description (may be truncated by hmmsearch or hmmpfam)
-    18     [17]     Total score trusted cutoff (not populated if -s is used)
-    19     [18]     Total score noise cutoff (not populated if -s is used)
-    20     [19]     Expect value for total hit
-    21     [20]     Expect value for domain hit
-    22     [21]     Domain score trusted cutoff (egad..hmm2.trusted_cutoff2) (not populated if -s is used)
-    23     [22]     Domain score noise cutoff (egad..hmm2.noise_cutoff2) (not populated if -s is used)
-    24     [23]     Total score gathering threshold (not populated if -s is used)
-    25     [24]     Domain score gathering threshold (not populated if -s is used)
-    """
     curs = conn.cursor()
 
     curs.execute("""
