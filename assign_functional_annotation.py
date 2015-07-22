@@ -86,7 +86,8 @@ def main():
                 hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
 
             ## then apply the evidence
-            #  NOT YET WRITTEN
+            apply_hmm_evidence(polypeptides=polypeptides, ev_conn=hmm_ev_db_conn, config=configuration,
+                               label=label, index_conn=index_conn)
                 
         elif evidence[label]['type'] == 'RAPSearch2':
             pass
@@ -109,6 +110,50 @@ def already_indexed(path=None, index=None):
     
     curs.close()
     return found
+
+def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, label=None, index_conn=None):
+    """
+    Uses HMM evidence to assign functional evidence to polypeptides.
+
+    ev_conn: SQLite3 connection to the parsed HMM search evidence db for this set of searches
+    config: The yaml object for the parsed annotation config file
+    label: Label for the evidence track entry within thet annotation config file
+    index_conn:  SQLite3 connection to the reference index for the database searched
+    """
+    ev_curs = ev_conn.cursor()
+    ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_score DESC"
+    acc_main_curs = index_conn.cursor()
+    acc_main_qry = "SELECT version, hmm_com_name, ec_num FROM hmm WHERE version = ?"
+    default_product = config['general']['default_product_name']
+
+    print("DEBUG: Applying HMM results to {0} polypeptides".format(len(polypeptides)))
+    
+    for id in polypeptides:
+        polypeptide = polypeptides[id]
+        annot = polypeptide.annotation
+
+        if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
+            raise Exception("ERROR: Support for the allow_attributes_from_multiple_sources=Yes setting not yet implemented")
+        else:
+            if annot.product_name != default_product: continue
+
+            print("DEBUG: Querying evidence results for polypeptide: {0}".format(polypeptide.id))
+            for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
+                print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
+                # ONLY TESTING CURRENTLY, NO CUTOFFS OR CLASS FILTERS APPLIED
+                
+                for acc_main_row in acc_main_curs.execute(acc_main_qry, (ev_row[0],)):
+                    annot.product_name = acc_main_row[1]
+                    annot.gene_symbol  = acc_main_row[2]
+                    print("DEBUG: assigned product name ({0}) for id ({1})".format(annot.product_name, id))
+                    
+                break
+                
+    
+        
+    acc_main_curs.close()
+    ev_curs.close()
+        
 
 def check_configuration(conf):
     """
