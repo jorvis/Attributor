@@ -59,17 +59,38 @@ def main():
         if evidence[label]['type'] == 'HMMer3_htab':
             index_label = evidence[label]['index']
 
+            ## handle the connection to the index
             if index_label in db_conn:
                 # if we already have a connection to this database, use it again
                 index_conn = db_conn[index_label]
             else:
                 # create one
-                index_path = "{0}.{1}.sqlite3".format(args.output_base, index_label)
-                index_conn = sqlite3.connect(index_path)
+                index_conn = sqlite3.connect(configuration['indexes'][index_label])
                 db_conn[index_label] = index_conn
-                initialize_hmm_results_db(index_conn)
-            
-            parse_hmmer3_htab(polypeptides=polypeptides, config=configuration, index=index_conn)
+                
+            ## handle the connection to the evidence db
+            hmm_ev_db_path = "{0}.hmm_ev.sqlite3".format(args.output_base)
+            if os.path.exists(hmm_ev_db_path):
+                hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
+            else:
+                ## initialize an HMM evidence database
+                hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
+                initialize_hmm_results_db(hmm_ev_db_conn)
+
+            db_conn['hmm_ev'] = hmm_ev_db_conn
+                
+            ## only parse the evidence if the list isn't already in the database
+            if not already_indexed(path=evidence[label]['path'], index=hmm_ev_db_conn):
+                index_hmmer3_htab(path=evidence[label]['path'], index=hmm_ev_db_conn)
+                hmm_ev_db_conn.commit()
+                # update the database search indexes
+                hmm_ev_db_curs = hmm_ev_db_conn.cursor()
+                hmm_ev_db_curs.execute("DROP INDEX IF EXISTS hmm_hit__qry_id")
+                hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
+
+            ## then apply the evidence
+            #  NOT YET WRITTEN
+                
         elif evidence[label]['type'] == 'RAPSearch2':
             pass
         else:
@@ -79,6 +100,18 @@ def main():
     for label in db_conn:
         db_conn[label].close()
 
+
+def already_indexed(path=None, index=None):
+    curs = index.cursor()
+    curs.execute("SELECT id FROM data_sources WHERE source_path = ?", (path, ))
+    found = False
+
+    for row in curs:
+        found = True
+        break
+    
+    curs.close()
+    return found
 
 def check_configuration(conf):
     """
@@ -99,6 +132,50 @@ def check_configuration(conf):
         if 'index' in item and item['index'] not in indexes:
             raise Exception("ERROR: Evidence item '{0}' references and index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
+def index_hmmer3_htab(path=None, index=None):
+    curs = index.cursor()
+    parsing_errors = 0
+    
+    for file in biocodeutils.read_list_file(path):
+        print("DEBUG: parsing: {0}".format(file))
+        for line in open(file):
+            line = line.rstrip()
+            #print("DEBUG: PARSING line: {0}".format(line))
+            cols = line.split("\t")
+
+            ## not sure what this is, but some lines have columns 7+ as these values:
+            #   hmm       to      ali     to              bias
+            if cols[6] == 'hmm': continue
+
+            qry = """
+                INSERT INTO hmm_hit (qry_id, qry_start, qry_end, hmm_accession, hmm_length, hmm_start, hmm_end, 
+                                     domain_score, total_score, total_score_tc, total_score_nc, total_score_gc,
+                                     domain_score_tc, domain_score_nc, domain_score_gc)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """
+            # the following columns in the htab files are nullable, which are filled with various widths of '-' characters
+            for i in (6,7,8,9,11):
+                if '--' in cols[i]:
+                    cols[i] = None
+                elif len(cols[i]) > 0:
+                    try:
+                        cols[i] = float(cols[i])
+                    except ValueError:
+                        #print("DEBUG: Could not convert this to a float: {0}".format(cols[i]))
+                        parsing_errors += 1
+                        cols[i] = None
+                
+            curs.execute(qry, (cols[5], cols[8], cols[9], cols[0], int(cols[2]), cols[6], cols[7], 
+                               cols[11], float(cols[12]), float(cols[17]), float(cols[18]), float(cols[23]),
+                               float(cols[21]), float(cols[22]), float(cols[24])))
+
+    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    curs.close()
+
+    if parsing_errors > 0:
+        print("WARN: There were {0} parsing errors (columns converted to None) when processing {1}\n".format(parsing_errors, path))
+        
+        
 def initialize_hmm_results_db(conn):
     """
     HTAB:
@@ -152,6 +229,13 @@ def initialize_hmm_results_db(conn):
         )
     """)
 
+    curs.execute("""
+        CREATE TABLE data_sources (
+            id                integer primary key,
+            source_path         text
+        )
+    """)
+
     curs.close()
     conn.commit()
         
@@ -195,8 +279,8 @@ def parse_evidence_config(conf):
 
     return ev
 
-def parse_hmmer3_htab(polypeptides=None, config=None, index=None):
-    pass
+
+    
     
 
 
