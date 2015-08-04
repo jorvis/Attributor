@@ -87,7 +87,7 @@ def main():
 
             ## then apply the evidence
             apply_hmm_evidence(polypeptides=polypeptides, ev_conn=hmm_ev_db_conn, config=configuration,
-                               ev_config=evidence[label], label=label, index_conn=index_conn)
+                               ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
                 
         elif evidence[label]['type'] == 'RAPSearch2':
             pass
@@ -127,7 +127,7 @@ def already_indexed(path=None, index=None):
     curs.close()
     return found
 
-def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None):
+def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None, log_fh=None):
     """
     Uses HMM evidence to assign functional evidence to polypeptides.  Description of arguments:
 
@@ -150,7 +150,8 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
 
     print("DEBUG: Applying HMM results to {0} polypeptides".format(len(polypeptides)))
 
-    DEBUG_LIMIT = 100
+    if 'debugging_polypeptide_limit' in config['general']:
+        DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
     
     for id in polypeptides:
         print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
@@ -166,9 +167,8 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
         else:
             if annot.product_name != default_product: continue
 
-            print("DEBUG: Querying evidence results for polypeptide: {0}".format(polypeptide.id))
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
-                print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
+                #print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
                 # ONLY TESTING CURRENTLY, NO CUTOFFS APPLIED
 
                 acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype FROM hmm WHERE version = ? or accession = ?"
@@ -181,13 +181,15 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                 
                 for acc_main_row in acc_main_curs.execute(acc_main_qry, acc_main_qry_args):
                     annot.product_name = acc_main_row[1]
-                    annot.gene_symbol  = acc_main_row[2]
-                    print("DEBUG: assigned product name ({0}) to id ({1}) from hit to ({2}), class ({3})".format(
+                    log_fh.write("INFO: {1}: Set product name to '{0}' from hit to {2}, isotype:{3}\n".format(
                         annot.product_name, id, ev_row[0], hmm_class_limit))
+
+                    if acc_main_row[2] is not None:
+                        annot.gene_symbol  = acc_main_row[2]
+                        log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from hit to {2}, isotype:{3}\n".format(
+                            annot.gene_symbol, id, ev_row[0], hmm_class_limit))
                     
                 break
-                
-    
         
     acc_main_curs.close()
     ev_curs.close()
