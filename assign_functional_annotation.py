@@ -19,7 +19,7 @@ Overall steps
 - Parse FASTA file and create an annotation index of them
 - Parse annotations
   - If a list file is defined more than once, cache the results?  Is this feasible given memory constraints?
-  
+  - 
 """
 
 import argparse
@@ -50,7 +50,7 @@ def main():
     db_conn = dict()
 
     # this is a dict of biothings.Polypeptide objects
-    polypeptides = initialize_polypeptides( sources_log_fh, args.input_fasta, default_product_name )
+    polypeptides = initialize_polypeptides(sources_log_fh, args.input_fasta, default_product_name)
 
     for label in configuration['order']:
         if label not in evidence:
@@ -87,7 +87,7 @@ def main():
 
             ## then apply the evidence
             apply_hmm_evidence(polypeptides=polypeptides, ev_conn=hmm_ev_db_conn, config=configuration,
-                               label=label, index_conn=index_conn)
+                               ev_config=evidence[label], label=label, index_conn=index_conn)
                 
         elif evidence[label]['type'] == 'RAPSearch2':
             pass
@@ -98,6 +98,22 @@ def main():
     for label in db_conn:
         db_conn[label].close()
 
+    ## MOVE THIS CODE into a new method and PolypeptideSet class within Biothings
+    fasta_ofh = open("{0}.faa".format(args.output_base), 'wt')
+    for id in polypeptides:
+        polypeptide = polypeptides[id]
+        export_header = ">{0}".format(id)
+        
+        if polypeptide.annotation.product_name is not None:
+            export_header += " {0}".format(polypeptide.annotation.product_name)
+
+        if polypeptide.annotation.gene_symbol is not None:
+            export_header += " gene_symbol::{0}".format(polypeptide.annotation.gene_symbol)
+
+        fasta_ofh.write("{0}\n".format(export_header))
+        fasta_ofh.write("{0}\n".format(biocodeutils.wrapped_fasta(polypeptide.residues)))
+
+    fasta_ofh.close()
 
 def already_indexed(path=None, index=None):
     curs = index.cursor()
@@ -111,41 +127,63 @@ def already_indexed(path=None, index=None):
     curs.close()
     return found
 
-def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, label=None, index_conn=None):
+def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None):
     """
-    Uses HMM evidence to assign functional evidence to polypeptides.
+    Uses HMM evidence to assign functional evidence to polypeptides.  Description of arguments:
 
+    polypeptides: a dict of biothings.Polypeptides objects, keyed on ID
     ev_conn: SQLite3 connection to the parsed HMM search evidence db for this set of searches
     config: The yaml object for the parsed annotation config file
+    ev_config: The parsed evidence section for this label within the annotation config file
     label: Label for the evidence track entry within thet annotation config file
     index_conn:  SQLite3 connection to the reference index for the database searched
     """
+    default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
     ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_score DESC"
+    
     acc_main_curs = index_conn.cursor()
-    acc_main_qry = "SELECT version, hmm_com_name, ec_num FROM hmm WHERE version = ?"
-    default_product = config['general']['default_product_name']
+    hmm_class_limit = None
+
+    if 'class' in ev_config:
+        hmm_class_limit = ev_config['class']
 
     print("DEBUG: Applying HMM results to {0} polypeptides".format(len(polypeptides)))
+
+    DEBUG_LIMIT = 100
     
     for id in polypeptides:
+        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
         polypeptide = polypeptides[id]
         annot = polypeptide.annotation
 
+        DEBUG_LIMIT = DEBUG_LIMIT - 1
+        if DEBUG_LIMIT == 0:
+            break
+
         if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
-            raise Exception("ERROR: Support for the allow_attributes_from_multiple_sources=Yes setting not yet implemented")
+            raise Exception("ERROR: Support for the general:allow_attributes_from_multiple_sources=Yes setting not yet implemented")
         else:
             if annot.product_name != default_product: continue
 
             print("DEBUG: Querying evidence results for polypeptide: {0}".format(polypeptide.id))
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
                 print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
-                # ONLY TESTING CURRENTLY, NO CUTOFFS OR CLASS FILTERS APPLIED
+                # ONLY TESTING CURRENTLY, NO CUTOFFS APPLIED
+
+                acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype FROM hmm WHERE version = ? or accession = ?"
+
+                if hmm_class_limit is None:
+                    acc_main_qry_args = (ev_row[0], ev_row[0], )
+                else:
+                    acc_main_qry += " AND isotype = ?"
+                    acc_main_qry_args = (ev_row[0], ev_row[0], hmm_class_limit)
                 
-                for acc_main_row in acc_main_curs.execute(acc_main_qry, (ev_row[0],)):
+                for acc_main_row in acc_main_curs.execute(acc_main_qry, acc_main_qry_args):
                     annot.product_name = acc_main_row[1]
                     annot.gene_symbol  = acc_main_row[2]
-                    print("DEBUG: assigned product name ({0}) for id ({1})".format(annot.product_name, id))
+                    print("DEBUG: assigned product name ({0}) to id ({1}) from hit to ({2}), class ({3})".format(
+                        annot.product_name, id, ev_row[0], hmm_class_limit))
                     
                 break
                 
@@ -174,6 +212,7 @@ def check_configuration(conf):
         if 'index' in item and item['index'] not in indexes:
             raise Exception("ERROR: Evidence item '{0}' references and index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
+
 def index_hmmer3_htab(path=None, index=None):
     curs = index.cursor()
     parsing_errors = 0
@@ -191,7 +230,8 @@ def index_hmmer3_htab(path=None, index=None):
             qry = """
                 INSERT INTO hmm_hit (qry_id, qry_start, qry_end, hmm_accession, hmm_length, hmm_start, hmm_end, 
                                      domain_score, total_score, total_score_tc, total_score_nc, total_score_gc,
-                                     domain_score_tc, domain_score_nc, domain_score_gc, total_hit_eval, domain_hit_eval)
+                                     domain_score_tc, domain_score_nc, domain_score_gc, total_hit_eval,
+                                     domain_hit_eval)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """
             # the following columns in the htab files are nullable, which are filled with various widths of '-' characters
