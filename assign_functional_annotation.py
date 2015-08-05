@@ -133,6 +133,9 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
 
     go_curs = index_conn.cursor()
     go_qry = "SELECT go_id FROM hmm_go WHERE hmm_id = ?"
+
+    ec_curs = index_conn.cursor()
+    ec_qry = "SELECT ec_id FROM hmm_ec WHERE hmm_id = ?"
     
     acc_main_curs = index_conn.cursor()
     hmm_class_limit = None
@@ -160,9 +163,6 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
             if annot.product_name != default_product: continue
 
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
-                #print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
-                # ONLY TESTING CURRENTLY, NO CUTOFFS APPLIED
-
                 acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype, id FROM hmm WHERE version = ? or accession = ?"
 
                 if hmm_class_limit is None:
@@ -184,12 +184,17 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                     ## add any matching GO terms
                     for go_row in go_curs.execute(go_qry, (acc_main_row[4],)):
                         annot.add_go_annotation(bioannotation.GOAnnotation(go_id=go_row[0]))
+
+                    ## add any matching EC numbers
+                    for ec_row in ec_curs.execute(ec_qry, (acc_main_row[4],)):
+                        annot.add_ec_number(bioannotation.ECAnnotation(number=ec_row[0]))
                     
                 break
         
     acc_main_curs.close()
     ev_curs.close()
     go_curs.close()
+    ec_curs.close()
         
 
 def check_configuration(conf):
