@@ -130,6 +130,9 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
     ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_score DESC"
+
+    go_curs = index_conn.cursor()
+    go_qry = "SELECT go_id FROM hmm_go WHERE hmm_id = ?"
     
     acc_main_curs = index_conn.cursor()
     hmm_class_limit = None
@@ -160,7 +163,7 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                 #print("DEBUG: pulling an evidence row for accession: {0}".format(ev_row[0]))
                 # ONLY TESTING CURRENTLY, NO CUTOFFS APPLIED
 
-                acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype FROM hmm WHERE version = ? or accession = ?"
+                acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype, id FROM hmm WHERE version = ? or accession = ?"
 
                 if hmm_class_limit is None:
                     acc_main_qry_args = (ev_row[0], ev_row[0], )
@@ -177,11 +180,16 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                         annot.gene_symbol  = acc_main_row[2]
                         log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from hit to {2}, isotype:{3}\n".format(
                             annot.gene_symbol, id, ev_row[0], hmm_class_limit))
+
+                    ## add any matching GO terms
+                    for go_row in go_curs.execute(go_qry, (acc_main_row[4],)):
+                        annot.add_go_annotation(bioannotation.GOAnnotation(go_id=go_row[0]))
                     
                 break
         
     acc_main_curs.close()
     ev_curs.close()
+    go_curs.close()
         
 
 def check_configuration(conf):
