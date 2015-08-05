@@ -98,23 +98,12 @@ def main():
     for label in db_conn:
         db_conn[label].close()
 
-    ## MOVE THIS CODE into a new method and PolypeptideSet class within Biothings
-    fasta_ofh = open("{0}.faa".format(args.output_base), 'wt')
-    for id in polypeptides:
-        polypeptide = polypeptides[id]
-        export_header = ">{0}".format(id)
-        
-        if polypeptide.annotation.product_name is not None:
-            export_header += " {0}".format(polypeptide.annotation.product_name)
+    # Write the FASTA
+    polyset = biothings.PolypeptideSet()
+    polyset.load_from_dict(polypeptides)
+    polyset.write_fasta(path="{0}.faa".format(args.output_base))
 
-        if polypeptide.annotation.gene_symbol is not None:
-            export_header += " gene_symbol::{0}".format(polypeptide.annotation.gene_symbol)
-
-        fasta_ofh.write("{0}\n".format(export_header))
-        fasta_ofh.write("{0}\n".format(biocodeutils.wrapped_fasta(polypeptide.residues)))
-
-    fasta_ofh.close()
-
+    
 def already_indexed(path=None, index=None):
     curs = index.cursor()
     curs.execute("SELECT id FROM data_sources WHERE source_path = ?", (path, ))
