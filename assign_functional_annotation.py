@@ -26,7 +26,9 @@ import argparse
 import bioannotation
 import biocodeutils
 import biothings
+import math
 import os
+import re
 import sqlite3
 import yaml
 
@@ -57,40 +59,20 @@ def main():
             raise Exception("ERROR: There is a label '{0}' in the 'order' section of the conf file that isn't present in the 'evidence' section".format(label))
 
         if evidence[label]['type'] == 'HMMer3_htab':
-            index_label = evidence[label]['index']
+            index_conn, ev_db_conn = get_or_create_db_connections(type_ev='hmm_ev', configuration=configuration,
+                                         evidence=evidence, label=label, db_conn=db_conn,
+                                         output_base=args.output_base)
 
-            # Use any existing index connection, else attach to it.
-            if index_label in db_conn:
-                index_conn = db_conn[index_label]
-            else:
-                index_conn = sqlite3.connect(configuration['indexes'][index_label])
-                db_conn[index_label] = index_conn
-                
-            # Attach to or create an HMM evidence database
-            hmm_ev_db_path = "{0}.hmm_ev.sqlite3".format(args.output_base)
-            if os.path.exists(hmm_ev_db_path):
-                hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
-            else:
-                hmm_ev_db_conn = sqlite3.connect(hmm_ev_db_path)
-                initialize_hmm_results_db(hmm_ev_db_conn)
-
-            db_conn['hmm_ev'] = hmm_ev_db_conn
-                
-            ## only parse the evidence if the list isn't already in the database
-            if not already_indexed(path=evidence[label]['path'], index=hmm_ev_db_conn):
-                index_hmmer3_htab(path=evidence[label]['path'], index=hmm_ev_db_conn)
-                hmm_ev_db_conn.commit()
-                # update the database search indexes
-                hmm_ev_db_curs = hmm_ev_db_conn.cursor()
-                hmm_ev_db_curs.execute("DROP INDEX IF EXISTS hmm_hit__qry_id")
-                hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
-
-            ## then apply the evidence
-            apply_hmm_evidence(polypeptides=polypeptides, ev_conn=hmm_ev_db_conn, config=configuration,
+            # then apply the evidence
+            apply_hmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
                 
         elif evidence[label]['type'] == 'RAPSearch2':
-            pass
+            index_conn, ev_db_conn = get_or_create_db_connections(type_ev='blast_ev', configuration=configuration,
+                                         evidence=evidence, label=label, db_conn=db_conn,
+                                         output_base=args.output_base)
+
+            # then apply the evidence
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
 
@@ -216,11 +198,65 @@ def check_configuration(conf):
         if 'index' in item and item['index'] not in indexes:
             raise Exception("ERROR: Evidence item '{0}' references and index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
+        
+def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None, label=None,
+                                 db_conn=None, output_base=None):
+    """
+    type_ev must be either 'hmm_ev' or 'blast_ev'
+    """
+    index_label = evidence[label]['index']
 
+    # Use any existing index connection, else attach to it.
+    if index_label in db_conn:
+        index_conn = db_conn[index_label]
+    else:
+        index_conn = sqlite3.connect(configuration['indexes'][index_label])
+        db_conn[index_label] = index_conn
+
+    # Attach to or create an evidence database
+    ev_db_path = "{0}.{1}.sqlite3".format(output_base, type_ev)
+    if os.path.exists(ev_db_path):
+        ev_db_conn = sqlite3.connect(ev_db_path)
+    else:
+        ev_db_conn = sqlite3.connect(ev_db_path)
+        if type_ev == 'hmm_ev':
+            initialize_hmm_results_db(ev_db_conn)
+        elif type_ev == 'blast_ev':
+            initialize_blast_results_db(ev_db_conn)
+
+    db_conn[type_ev] = ev_db_conn
+
+    # only parse the evidence if the list isn't already in the database
+    if not already_indexed(path=evidence[label]['path'], index=ev_db_conn):
+
+        if type_ev == 'hmm_ev':
+            index_hmmer3_htab(path=evidence[label]['path'], index=ev_db_conn)
+            ev_db_conn.commit()
+            # update the database search indexes
+            hmm_ev_db_curs = ev_db_conn.cursor()
+            hmm_ev_db_curs.execute("DROP INDEX IF EXISTS hmm_hit__qry_id")
+            hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
+        elif type_ev == 'blast_ev':
+            index_rapsearch2_m8(path=evidence[label]['path'], index=ev_db_conn)
+            ev_db_conn.commit()
+            blast_ev_db_curs = ev_db_conn.cursor()
+            blast_ev_db_curs.execute("DROP INDEX IF EXISTS blast_hit__qry_id")
+            blast_ev_db_curs.execute("CREATE INDEX blast_hit__qry_id ON blast_hit (qry_id)")
+
+    return (index_conn, ev_db_conn)
+        
 def index_hmmer3_htab(path=None, index=None):
     curs = index.cursor()
     parsing_errors = 0
-    
+
+    qry = """
+          INSERT INTO hmm_hit (qry_id, qry_start, qry_end, hmm_accession, hmm_length, hmm_start, hmm_end, 
+                               domain_score, total_score, total_score_tc, total_score_nc, total_score_gc,
+                               domain_score_tc, domain_score_nc, domain_score_gc, total_hit_eval,
+                               domain_hit_eval)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """
+
     for file in biocodeutils.read_list_file(path):
         print("DEBUG: parsing: {0}".format(file))
         for line in open(file):
@@ -231,13 +267,6 @@ def index_hmmer3_htab(path=None, index=None):
             #   hmm       to      ali     to              bias
             if cols[6] == 'hmm': continue
 
-            qry = """
-                INSERT INTO hmm_hit (qry_id, qry_start, qry_end, hmm_accession, hmm_length, hmm_start, hmm_end, 
-                                     domain_score, total_score, total_score_tc, total_score_nc, total_score_gc,
-                                     domain_score_tc, domain_score_nc, domain_score_gc, total_hit_eval,
-                                     domain_hit_eval)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """
             # the following columns in the htab files are nullable, which are filled with various widths of '-' characters
             for i in (6,7,8,9,11,19,20):
                 if '--' in cols[i]:
@@ -259,8 +288,82 @@ def index_hmmer3_htab(path=None, index=None):
 
     if parsing_errors > 0:
         print("WARN: There were {0} parsing errors (columns converted to None) when processing {1}\n".format(parsing_errors, path))
+
+def index_rapsearch2_m8(path=None, index=None):
+    curs = index.cursor()
+    parsing_errors = 0
+
+    # The E-value column can be either the E-value directly or log(E-value), depending on
+    #  the version and options used.  Luckily, the header line tells us which it is.
+    logged_eval = False
+
+    qry = """
+          INSERT INTO blast_hit (qry_id, sbj_id, align_len, qry_start, qry_end, sbj_start,
+                                 sbj_end, perc_identity, eval, bit_score)
+          VALUES (?,?,?,?,?,?,?,?,?,?)
+    """
+    
+    for file in biocodeutils.read_list_file(path):
+        print("DEBUG: parsing: {0}".format(file))
+        for line in open(file):
+            if line[0] == '#':
+                m = re.search('log\(e\-value\)', line)
+                if m:
+                    logged_eval = True
+                continue
+            
+            line = line.rstrip()
+            cols = line.split("\t")
+
+            if len(cols) != 12:
+                continue
+
+            if logged_eval == True:
+                try:
+                    cols[10] = math.pow(10, float(cols[10]))
+                except OverflowError:
+                    # RapSearch2 sometimes reports miniscule e-values, such a log(eval) of > 1000
+                    #  These are outside of the range of Python's double.  In my checking of these
+                    #  though, their alignments don't warrant a low E-value at all.  Skipping them.
+                    print("Warning: Skipping a RAPSearch2 row:  overflow error converting E-value ({0}) on line: {1}".format(cols[10], line))
+                    continue
+                
+            curs.execute(qry, (cols[0], cols[1], int(cols[3]), int(cols[6]), int(cols[7]), int(cols[8]),
+                               int(cols[9]), float(cols[2]), cols[10], float(cols[11])))
+
+    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    curs.close()
+
         
-        
+def initialize_blast_results_db(conn):
+    curs = conn.cursor()
+
+    curs.execute("""
+        CREATE TABLE blast_hit (
+            id                integer primary key,
+            qry_id            text,
+            sbj_id            text,
+            align_len         integer,
+            qry_start         integer,
+            qry_end           integer,
+            sbj_start         integer,
+            sbj_end           integer,
+            perc_identity     real,
+            eval              real,
+            bit_score         real
+        )
+    """)
+
+    curs.execute("""
+        CREATE TABLE data_sources (
+            id                integer primary key,
+            source_path         text
+        )
+    """)
+
+    curs.close()
+    conn.commit()
+                
 def initialize_hmm_results_db(conn):
     curs = conn.cursor()
 
