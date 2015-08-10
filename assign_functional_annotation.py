@@ -157,6 +157,12 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from {3} hit to {2}\n".format(
                         annot.product_name, id, ev_row[0], label))
 
+                for go_annot in blast_annot.go_annotations:
+                    annot.add_go_annotation(go_annot)
+
+                for ec_num in blast_annot.ec_numbers:
+                    annot.add_ec_number(ec_num)
+
                 # If we get this far we've assigned annotation and don't want to look at any more
                 break
 
