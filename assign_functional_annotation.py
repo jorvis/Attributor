@@ -508,6 +508,46 @@ def initialize_hmm_results_db(conn):
 
     curs.close()
     conn.commit()
+
+def initialize_tmhmm_results_db(conn):
+    curs.conn.cursor()
+
+    """
+    tmh_count: Number of predicted Trans-Membrane Helices (TMHs)
+    num_aa_in_tmhs: Exp number of AAs in TMHs
+    num_aa_in_f60: Exp number of AAs in TMHs within first 60 AAs
+    
+    """
+    curs.execute("""
+        CREATE TABLE tmhmm_hit (
+            id                integer primary key,
+            qry_id            text,
+            tmh_count         float,
+            num_aa_in_tmhs    float,
+            num_aa_in_f60     float,
+            total_prob_n_in   float
+        )
+    """)
+
+    curs.execute("""
+        CREATE TABLE tmhmm_path (
+            hit_id            integer,
+            locus             text,
+            start             integer,
+            stop              integer
+        )
+    """)
+
+    curs.execute("""
+        CREATE TABLE data_sources (
+            id                integer primary key,
+            source_path         text
+        )
+    """)
+
+    curs.close()
+    conn.commit()
+
         
 def initialize_polypeptides( log_fh, fasta_file, default_name ):
     '''
