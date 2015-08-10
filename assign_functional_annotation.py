@@ -82,6 +82,8 @@ def main():
     for label in db_conn:
         db_conn[label].close()
 
+    perform_final_checks(polypeptides=polypeptides, config=configuration, log_fh=sources_log_fh)
+
     # Write the FASTA
     polyset = biothings.PolypeptideSet()
     polyset.load_from_dict(polypeptides)
@@ -548,6 +550,20 @@ def parse_evidence_config(conf):
     return ev
 
 
+def perform_final_checks(polypeptides=None, config=None, log_fh=None):
+    """
+    Does a round of checks we want to perform on an annotated set of polypeptides
+    before exporting them.  Currently:
+
+    - Make sure a gene product name is assigned.  This might accidentally become "None" if
+      a match existed to a subject which didn't have a name properly entered in the index.
+    """
+    for id in polypeptides:
+        polypeptide = polypeptides[id]
+
+        if polypeptide.annotation.product_name is None:
+            log_fh.write("WARNING: {0}: Somehow made it through annotation with no product name.  Setting to default\n".format(id))
+            polypeptide.annotation.product_name = config['general']['default_product_name']
     
     
 
