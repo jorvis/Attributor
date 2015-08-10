@@ -33,7 +33,7 @@ import sqlite3
 import yaml
 
 def main():
-    parser = argparse.ArgumentParser( description='Put a description of your script here')
+    parser = argparse.ArgumentParser( description='Assigns functional annotation based on user-configurable evidence tiers')
 
     ## output file to be written
     parser.add_argument('-f', '--input_fasta', type=str, required=True, help='Protein FASTA file of source molecules' )
@@ -73,6 +73,8 @@ def main():
                                          output_base=args.output_base)
 
             # then apply the evidence
+            apply_blast_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
+                                 ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
 
@@ -98,6 +100,69 @@ def already_indexed(path=None, index=None):
     curs.close()
     return found
 
+def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None, log_fh=None):
+    """
+    Uses BLAST (or similar) evidence to assign functional evidence to polypeptides.  Description of arguments:
+
+    polypeptides: a dict of biothings.Polypeptides objects, keyed on ID
+    ev_conn: SQLite3 connection to the parsed BLAST(ish) search evidence db for this set of searches
+    config: The yaml object for the parsed annotation config file
+    ev_config: The parsed evidence section for this label within the annotation config file
+    label: Label for the evidence track entry within thet annotation config file
+    index_conn:  SQLite3 connection to the reference index for the database searched
+    """
+    default_product = config['general']['default_product_name']
+    ev_curs = ev_conn.cursor()
+    ev_qry = "SELECT sbj_id, align_len, perc_identity, eval, bit_score FROM blast_hit WHERE qry_id = ? ORDER BY eval ASC"
+
+    print("DEBUG: Applying {1} results to {0} polypeptides".format(len(polypeptides), label))
+    
+    if 'debugging_polypeptide_limit' in config['general']:
+        DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
+
+    # Are coverage cutoffs defined?
+    query_cov_cutoff = None
+    match_cov_cutoff = None
+    if 'query_cov' in ev_config:
+        query_cov_cutoff = int(ev_config['query_cov'].rstrip('%'))
+
+    for id in polypeptides:
+        polypeptide = polypeptides[id]
+        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
+        annot = polypeptide.annotation
+
+        DEBUG_LIMIT = DEBUG_LIMIT - 1
+        if DEBUG_LIMIT == 0:
+            break
+
+        if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
+            raise Exception("ERROR: Support for the general:allow_attributes_from_multiple_sources=Yes setting not yet implemented")
+        else:
+            if annot.product_name != default_product: continue
+
+            for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
+                if query_cov_cutoff is not None:
+                    perc_coverage = (ev_row[1] / polypeptide.length)*100
+                    if perc_coverage < query_cov_cutoff:
+                        #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2} requirements".format(
+                        #    ev_row[0], perc_coverage, query_cov_cutoff))
+                        continue
+                
+                blast_annot = get_blast_result_info(conn=index_conn, accession=ev_row[0], config=config)
+                annot.product_name = blast_annot.product_name
+                log_fh.write("INFO: {1}: Set product name to '{0}' from {3} hit to {2}\n".format(
+                        annot.product_name, id, ev_row[0], label))
+                
+                annot.gene_symbol = blast_annot.gene_symbol
+                log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from {3} hit to {2}\n".format(
+                        annot.product_name, id, ev_row[0], label))
+
+                # If we get this far we've assigned annotation and don't want to look at any more
+                break
+
+    ev_curs.close()
+                
+    
 def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None, log_fh=None):
     """
     Uses HMM evidence to assign functional evidence to polypeptides.  Description of arguments:
@@ -111,7 +176,7 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     """
     default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
-    ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_score DESC"
+    ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_hit_eval ASC"
 
     go_curs = index_conn.cursor()
     go_qry = "SELECT go_id FROM hmm_go WHERE hmm_id = ?"
@@ -155,13 +220,13 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                 
                 for acc_main_row in acc_main_curs.execute(acc_main_qry, acc_main_qry_args):
                     annot.product_name = acc_main_row[1]
-                    log_fh.write("INFO: {1}: Set product name to '{0}' from hit to {2}, isotype:{3}\n".format(
-                        annot.product_name, id, ev_row[0], hmm_class_limit))
+                    log_fh.write("INFO: {1}: Set product name to '{0}' from {3} hit to {2}, isotype:{3}\n".format(
+                        annot.product_name, id, ev_row[0], hmm_class_limit, label))
 
                     if acc_main_row[2] is not None:
                         annot.gene_symbol  = acc_main_row[2]
-                        log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from hit to {2}, isotype:{3}\n".format(
-                            annot.gene_symbol, id, ev_row[0], hmm_class_limit))
+                        log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from {3} hit to {2}, isotype:{3}\n".format(
+                            annot.gene_symbol, id, ev_row[0], hmm_class_limit, label))
 
                     ## add any matching GO terms
                     for go_row in go_curs.execute(go_qry, (acc_main_row[4],)):
@@ -198,6 +263,42 @@ def check_configuration(conf):
         if 'index' in item and item['index'] not in indexes:
             raise Exception("ERROR: Evidence item '{0}' references and index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
+
+def get_blast_result_info(conn=None, accession=None, config=None):
+    curs = conn.cursor()
+    ec_curs = conn.cursor()
+    go_curs = conn.cursor()
+    annot = bioannotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
+
+    if accession.startswith('UniRef100_'):
+        accession = accession.lstrip('UniRef100_')
+
+    # This is currently specific to my uniref index.
+    # First we need to get the ID from the accession
+    qry = """
+          SELECT u.id, ua.accession, u.full_name, u.symbol
+          FROM uniref u
+               JOIN uniref_acc ua ON u.id=ua.id
+          WHERE ua.accession = ?
+          """
+
+    for row in curs.execute(qry, (accession,)):
+        uniref_id = row[0]
+        annot.product_name = row[2]
+        annot.gene_symbol = row[3]
+
+        qry = "SELECT ec_num FROM uniref_ec WHERE id = ?"
+        for ec_row in ec_curs.execute(qry, (uniref_id,)):
+            annot.add_ec_number( bioannotation.ECAnnotation(number=ec_row[0]) )
+
+        qry = "SELECT go_id FROM uniref_go WHERE id = ?"
+        for go_row in go_curs.execute(qry, (uniref_id,)):
+            annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
+
+    curs.close()
+    ec_curs.close()
+    go_curs.close()
+    return annot
         
 def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None, label=None,
                                  db_conn=None, output_base=None):
