@@ -60,21 +60,21 @@ def main():
 
         if evidence[label]['type'] == 'HMMer3_htab':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='hmm_ev', configuration=configuration,
-                                         evidence=evidence, label=label, db_conn=db_conn,
-                                         output_base=args.output_base)
-
-            # then apply the evidence
+                                         evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
             apply_hmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
                 
         elif evidence[label]['type'] == 'RAPSearch2':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='blast_ev', configuration=configuration,
-                                         evidence=evidence, label=label, db_conn=db_conn,
-                                         output_base=args.output_base)
-
-            # then apply the evidence
+                                         evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
             apply_blast_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                  ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
+
+        elif evidence[label]['type'] == 'TMHMM':
+            index_conn, ev_db_conn = get_or_create_db_connections(type_ev='tmhmm_ev', configuration=configuration,
+                                         evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
+
+            # then apply the evidence
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
 
@@ -311,16 +311,21 @@ def get_blast_result_info(conn=None, accession=None, config=None):
 def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None, label=None,
                                  db_conn=None, output_base=None):
     """
-    type_ev must be either 'hmm_ev' or 'blast_ev'
+    type_ev must be either 'hmm_ev', 'blast_ev' or 'tmhmm_ev'
     """
-    index_label = evidence[label]['index']
+    if type_ev in ['hmm_ev', 'blast_ev']:
+        index_label = evidence[label]['index']
+    elif type_ev in ['tmhmm_ev']:
+        index_label = None
 
     # Use any existing index connection, else attach to it.
-    if index_label in db_conn:
-        index_conn = db_conn[index_label]
-    else:
-        index_conn = sqlite3.connect(configuration['indexes'][index_label])
-        db_conn[index_label] = index_conn
+    index_conn = None
+    if index_label is not None:
+        if index_label in db_conn:
+            index_conn = db_conn[index_label]
+        else:
+            index_conn = sqlite3.connect(configuration['indexes'][index_label])
+            db_conn[index_label] = index_conn
 
     # Attach to or create an evidence database
     ev_db_path = "{0}.{1}.sqlite3".format(output_base, type_ev)
@@ -332,6 +337,8 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
             initialize_hmm_results_db(ev_db_conn)
         elif type_ev == 'blast_ev':
             initialize_blast_results_db(ev_db_conn)
+        elif type_ev == 'tmhmm_ev':
+            initialize_tmhmm_results_db(ev_db_conn)
 
     db_conn[type_ev] = ev_db_conn
 
@@ -345,13 +352,25 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
             hmm_ev_db_curs = ev_db_conn.cursor()
             hmm_ev_db_curs.execute("DROP INDEX IF EXISTS hmm_hit__qry_id")
             hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
+            hmm_ev_db_curs.close()
         elif type_ev == 'blast_ev':
             index_rapsearch2_m8(path=evidence[label]['path'], index=ev_db_conn)
             ev_db_conn.commit()
             blast_ev_db_curs = ev_db_conn.cursor()
             blast_ev_db_curs.execute("DROP INDEX IF EXISTS blast_hit__qry_id")
             blast_ev_db_curs.execute("CREATE INDEX blast_hit__qry_id ON blast_hit (qry_id)")
+            blast_ev_db_curs.close()
+        elif type_ev == 'tmhmm_ev':
+            index_tmhmm_raw(path=evidence[label]['path'], index=ev_db_conn)
+            ev_db_conn.commit()
+            tmhmm_ev_db_curs = ev_db_conn.cursor()
+            tmhmm_ev_db_curs.execute("DROP INDEX IF EXISTS tmhmm_hit__qry_id")
+            tmhmm_ev_db_curs.execute("CREATE INDEX tmhmm_hit__qry_id ON tmhmm_hit (qry_id)")
+            tmhmm_ev_db_curs.execute("DROP INDEX IF EXISTS tmhmm_path__hit_id")
+            tmhmm_ev_db_curs.execute("CREATE INDEX tmhmm_path__hit_id ON tmhmm_path (hit_id)")
+            tmhmm_ev_db_curs.close()
 
+    ev_db_conn.commit()
     return (index_conn, ev_db_conn)
         
 def index_hmmer3_htab(path=None, index=None):
@@ -434,7 +453,8 @@ def index_rapsearch2_m8(path=None, index=None):
                     # RapSearch2 sometimes reports miniscule e-values, such a log(eval) of > 1000
                     #  These are outside of the range of Python's double.  In my checking of these
                     #  though, their alignments don't warrant a low E-value at all.  Skipping them.
-                    print("Warning: Skipping a RAPSearch2 row:  overflow error converting E-value ({0}) on line: {1}".format(cols[10], line))
+                    print("WARN: Skipping a RAPSearch2 row:  overflow error converting E-value ({0}) on line: {1}".format(cols[10], line))
+                    parsing_errors += 1
                     continue
                 
             curs.execute(qry, (cols[0], cols[1], int(cols[3]), int(cols[6]), int(cols[7]), int(cols[8]),
@@ -442,8 +462,117 @@ def index_rapsearch2_m8(path=None, index=None):
 
     curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
     curs.close()
+    if parsing_errors > 0:
+        print("WARN: There were {0} parsing errors (match rows skipped) when processing {1}\n".format(parsing_errors, path))
 
+
+def index_tmhmm_raw(path=None, index=None):
+    """
+    Notes from the esteemed M Giglio:
+    The GO term to use would be GO:0016021 "integral component of membrane"
+    Or if you want to be more conservative you could go with GO:0016020 "membrane"
+    
+    Depends on the evidence. For the prok pipe we are pretty conservative, we require five TMHMM
+    domains and then we call it putative integral membrane protein. 
+
+    On ECO - in fact Marcus and I are the developers of ECO.  It is an ontology of evidence types.
+    An annotation to an ECO term is used in conjunction with another annotation, like a GO term
+    (but many other types of annotation can, and are, used with ECO). It provides additional
+    information about the annotation. In fact for GO, the assignment of an evidence term along
+    with a GO term is a required part of a GO annotation. (ECO terms are the "evidence codes" in GO.)
+
+    INPUT: Expected TMHMM input (all HTML lines are skipped)
+    # CHARM010_V2.mRNA.887 Length: 904
+    # CHARM010_V2.mRNA.887 Number of predicted TMHs:  6
+    # CHARM010_V2.mRNA.887 Exp number of AAs in TMHs: 133.07638
+    # CHARM010_V2.mRNA.887 Exp number, first 60 AAs:  21.83212
+    # CHARM010_V2.mRNA.887 Total prob of N-in:        0.99994
+    # CHARM010_V2.mRNA.887 POSSIBLE N-term signal sequence
+    CHARM010_V2.mRNA.887	TMHMM2.0	inside	     1    11
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	    12    34
+    CHARM010_V2.mRNA.887	TMHMM2.0	outside	    35   712
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	   713   735
+    CHARM010_V2.mRNA.887	TMHMM2.0	inside	   736   755
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	   756   773
+    CHARM010_V2.mRNA.887	TMHMM2.0	outside	   774   782
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	   783   805
+    CHARM010_V2.mRNA.887	TMHMM2.0	inside	   806   809
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	   810   832
+    CHARM010_V2.mRNA.887	TMHMM2.0	outside	   833   871
+    CHARM010_V2.mRNA.887	TMHMM2.0	TMhelix	   872   894
+    CHARM010_V2.mRNA.887	TMHMM2.0	inside	   895   904
+    """
+    curs = index.cursor()
+    parsing_errors = 0
+
+    hit_qry = """
+       INSERT INTO tmhmm_hit (qry_id, tmh_count, num_aa_in_tmhs, num_aa_in_f60, total_prob_n_in)
+       VALUES (?, ?, ?, ?, ?)
+    """
+
+    path_qry = """
+       INSERT INTO tmhmm_path (hit_id, locus, start, stop)
+       VALUES (?, ?, ?, ?)
+    """
+
+    for file in biocodeutils.read_list_file(path):
+        print("DEBUG: parsing: {0}".format(file))
+        last_qry_id = None
+        current_hit_id = None
+        current_path = list()
+        tmh_count = num_aa_in_tmhs = num_aa_in_f60 = total_prob_n_in = 0
         
+        for line in open(file):
+            # skip the HTML lines
+            if line.startswith('<'): continue
+
+            m = Match()
+            if m.match("# (.+?)\s+Length: \d+", line): # this line marks a new result
+                current_id = m.m.group(1)
+
+                # purge the previous result
+                if last_qry_id is not None:
+                    curs.execute(hit_qry, (last_qry_id, tmh_count, num_aa_in_tmhs, num_aa_in_f60, total_prob_n_in))
+                    current_hit_id = curs.lastrowid
+
+                for span in current_path:
+                    curs.execute(path_qry, (current_hit_id, span[2], int(span[3]), int(span[4])))
+
+                # reset
+                last_qry_id = current_id
+                current_helix_count = tmh_count = num_aa_in_tmhs = num_aa_in_f60 = total_prob_n_in = 0
+                current_path = list()
+                
+            elif m.match(".+Number of predicted TMHs:\s+(\d+)", line):
+                tmh_count = int(m.m.group(1))
+            elif m.match(".+Exp number of AAs in TMHs:\s+([0-9\.]+)", line):
+                num_aa_in_tmhs = float(m.m.group(1))
+            elif m.match(".+Exp number, first 60 AAs:\s+([0-9\.]+)", line):
+                num_aa_in_f60 = float(m.m.group(1))
+            elif m.match(".+Total prob of N-in:\s+([0-9\.]+)", line):
+                total_prob_n_in = float(m.m.group(1))
+            else:
+                if line[0] == '#': continue
+                
+                cols = line.split()
+                if len(cols) == 5:
+                    current_path.append(cols)
+
+        # don't forget to do the last entry
+        curs.execute(hit_qry, (last_qry_id, tmh_count, num_aa_in_tmhs, num_aa_in_f60, total_prob_n_in))
+        current_hit_id = curs.lastrowid
+        for span in current_path:
+            curs.execute(path_qry, (current_hit_id, span[2], int(span[3]), int(span[4])))
+        
+
+    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    curs.close()
+    index.commit()
+    
+    if parsing_errors > 0:
+        print("WARN: There were {0} parsing errors (match rows skipped) when processing {1}\n".format(parsing_errors, path))
+
+    
 def initialize_blast_results_db(conn):
     curs = conn.cursor()
 
@@ -510,7 +639,7 @@ def initialize_hmm_results_db(conn):
     conn.commit()
 
 def initialize_tmhmm_results_db(conn):
-    curs.conn.cursor()
+    curs = conn.cursor()
 
     """
     tmh_count: Number of predicted Trans-Membrane Helices (TMHs)
@@ -606,7 +735,25 @@ def perform_final_checks(polypeptides=None, config=None, log_fh=None):
             polypeptide.annotation.product_name = config['general']['default_product_name']
     
     
+class Match(object):
+    """
+    Python doesn't really have a good syntax for doing a series of conditional checks on a line if you want
+    to also capture part of the matter and use it.  This wraps the match object so that we can do exactly that.
 
+    Example use:
+    match = Match() 
+
+    if match.match(pattern1, string1): 
+       do_something( print(match.m.group(1)) ) 
+    elif match.match(pattern2, string2): 
+       do_something_else( print(match.m.group(1)) ) 
+    """
+    def __init__(self): 
+        self.m = None 
+
+    def match(self, *args, **kwds): 
+        self.m = re.match(*args, **kwds)
+        return self.m is not None 
 
 if __name__ == '__main__':
     main()
