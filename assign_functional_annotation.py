@@ -13,13 +13,6 @@ Current limitations:
 - IGS 'PFunc' hierarchy
 http://imgur.com/1odYcT5
 
-
-Overall steps
-
-- Parse FASTA file and create an annotation index of them
-- Parse annotations
-  - If a list file is defined more than once, cache the results?  Is this feasible given memory constraints?
-  - 
 """
 
 import argparse
@@ -75,6 +68,9 @@ def main():
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
 
             # then apply the evidence
+            apply_tmhmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
+                                 ev_config=evidence[label], label=label, log_fh=sources_log_fh)
+
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
 
@@ -251,6 +247,46 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     go_curs.close()
     ec_curs.close()
         
+
+def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, log_fh=None):
+    default_product = config['general']['default_product_name']
+    tmhmm_default_product = ev_config['product_name']
+    min_helical_spans = int(ev_config['min_helical_spans'])
+    
+    ev_curs = ev_conn.cursor()
+    ev_qry = """
+       SELECT th.id, count(tp.hit_id)
+         FROM tmhmm_hit th
+              JOIN tmhmm_path tp ON th.id=tp.hit_id
+        WHERE th.qry_id = ?
+    """
+    if 'debugging_polypeptide_limit' in config['general']:
+        DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
+
+    print("DEBUG: Applying TMHMM results to {0} polypeptides".format(len(polypeptides)))
+
+    for id in polypeptides:
+        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
+        polypeptide = polypeptides[id]
+        annot = polypeptide.annotation
+
+        DEBUG_LIMIT = DEBUG_LIMIT - 1
+        if DEBUG_LIMIT == 0:
+            break
+
+        if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
+            raise Exception("ERROR: Support for the general:allow_attributes_from_multiple_sources=Yes setting not yet implemented")
+        else:
+            if annot.product_name != default_product: continue
+
+            for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
+                if ev_row[1] >= min_helical_spans:
+                    annot.product_name = tmhmm_default_product
+                    annot.add_go_annotation( bioannotation.GOAnnotation(go_id='0016021') )
+                    break
+
+    ev_curs.close()
+
 
 def check_configuration(conf):
     """
