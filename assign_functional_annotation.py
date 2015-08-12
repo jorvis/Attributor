@@ -282,6 +282,8 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
                 if ev_row[1] >= min_helical_spans:
                     annot.product_name = tmhmm_default_product
+                    log_fh.write("INFO: {0}: Set product name to '{1}' because it had a TMHMM prediction of {2} transmembrane helices\n".format(
+                            id, tmhmm_default_product, ev_row[1]))
                     annot.add_go_annotation( bioannotation.GOAnnotation(go_id='0016021') )
                     break
 
