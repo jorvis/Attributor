@@ -23,6 +23,7 @@ import math
 import os
 import re
 import sqlite3
+import xml.etree.ElementTree as etree
 import yaml
 
 def main():
@@ -57,7 +58,7 @@ def main():
             apply_hmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
                 
-        elif evidence[label]['type'] == 'RAPSearch2':
+        elif evidence[label]['type'] == 'RAPSearch2_m8':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='blast_ev', configuration=configuration,
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
             apply_blast_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
@@ -247,6 +248,11 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     go_curs.close()
     ec_curs.close()
         
+
+def apply_lipoprotein_motif_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, log_fh=None):
+    default_product = config['general']['default_product_name']
+    lipoprotein_motif_default_product = ev_config['product_name']
+
 
 def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, log_fh=None):
     default_product = config['general']['default_product_name']
