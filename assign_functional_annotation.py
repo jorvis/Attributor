@@ -67,10 +67,13 @@ def main():
         elif evidence[label]['type'] == 'TMHMM':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='tmhmm_ev', configuration=configuration,
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
-
-            # then apply the evidence
             apply_tmhmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                  ev_config=evidence[label], label=label, log_fh=sources_log_fh)
+        elif evidence[label]['type'] == 'lipoprotein_motif_bsml':
+            index_conn, ev_db_conn = get_or_create_db_connections(type_ev='lipoprotein_motif_ev', configuration=configuration,
+                                         evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
+            apply_lipoprotein_motif_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
+                                             ev_config=evidence[label], label=label, log_fh=sources_log_fh)
 
         else:
             raise Exception("ERROR: Unsupported evidence type '{0}' with label '{1}' in configuration file".format(evidence[label]['type'], label))
@@ -253,6 +256,39 @@ def apply_lipoprotein_motif_evidence(polypeptides=None, ev_conn=None, config=Non
     default_product = config['general']['default_product_name']
     lipoprotein_motif_default_product = ev_config['product_name']
 
+    ev_curs = ev_conn.cursor()
+    ev_qry = """
+       SELECT hit_acc, hit_desc, start, stop
+         FROM lipoprotein_motif_hit
+        WHERE qry_id = ?
+    """
+    if 'debugging_polypeptide_limit' in config['general']:
+        DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
+
+    print("DEBUG: Applying lipoprotein_motif results to {0} polypeptides".format(len(polypeptides)))
+
+    for id in polypeptides:
+        #print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
+        polypeptide = polypeptides[id]
+        annot = polypeptide.annotation
+
+        DEBUG_LIMIT = DEBUG_LIMIT - 1
+        if DEBUG_LIMIT == 0:
+            break
+
+        if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
+            raise Exception("ERROR: Support for the general:allow_attributes_from_multiple_sources=Yes setting not yet implemented")
+        else:
+            if annot.product_name != default_product: continue
+
+            for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
+                log_fh.write("INFO: {0}: Set product name to '{1}' because it had a lipoprotein_motif match to accession:{2}, description:{3}\n".format(
+                            id, lipoprotein_motif_default_product, ev_row[0], ev_row[1]))
+                annot.product_name = lipoprotein_motif_default_product
+                break
+
+    ev_curs.close()
+
 
 def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, log_fh=None):
     default_product = config['general']['default_product_name']
@@ -272,7 +308,7 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     print("DEBUG: Applying TMHMM results to {0} polypeptides".format(len(polypeptides)))
 
     for id in polypeptides:
-        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
+        #print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
         polypeptide = polypeptides[id]
         annot = polypeptide.annotation
 
@@ -359,7 +395,7 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
     """
     if type_ev in ['hmm_ev', 'blast_ev']:
         index_label = evidence[label]['index']
-    elif type_ev in ['tmhmm_ev']:
+    elif type_ev in ['tmhmm_ev', 'lipoprotein_motif_ev']:
         index_label = None
 
     # Use any existing index connection, else attach to it.
@@ -383,6 +419,8 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
             initialize_blast_results_db(ev_db_conn)
         elif type_ev == 'tmhmm_ev':
             initialize_tmhmm_results_db(ev_db_conn)
+        elif type_ev == 'lipoprotein_motif_ev':
+            initialize_lipoprotein_motif_results_db(ev_db_conn)
 
     db_conn[type_ev] = ev_db_conn
 
@@ -413,6 +451,13 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
             tmhmm_ev_db_curs.execute("DROP INDEX IF EXISTS tmhmm_path__hit_id")
             tmhmm_ev_db_curs.execute("CREATE INDEX tmhmm_path__hit_id ON tmhmm_path (hit_id)")
             tmhmm_ev_db_curs.close()
+        elif type_ev == 'lipoprotein_motif_ev':
+            index_lipoprotein_motif(path=evidence[label]['path'], index=ev_db_conn)
+            ev_db_conn.commit()
+            lipo_ev_db_curs = ev_db_conn.cursor()
+            lipo_ev_db_curs.execute("DROP INDEX IF EXISTS lipoprotein_motif_hit__qry_id")
+            lipo_ev_db_curs.execute("CREATE INDEX lipoprotein_motif_hit__qry_id ON lipoprotein_motif_hit (qry_id)")
+            lipo_ev_db_curs.close()
 
     ev_db_conn.commit()
     return (index_conn, ev_db_conn)
@@ -461,6 +506,39 @@ def index_hmmer3_htab(path=None, index=None):
     if parsing_errors > 0:
         print("WARN: There were {0} parsing errors (columns converted to None) when processing {1}\n".format(parsing_errors, path))
 
+def index_lipoprotein_motif(path=None, index=None):
+    curs = index.cursor()
+    parsing_errors = 0
+
+    qry = """
+          INSERT INTO lipoprotein_motif_hit (qry_id, hit_acc, hit_desc, start, stop)
+          VALUES (?, ?, ?, ?, ?)
+    """
+
+    # http://www.diveintopython3.net/xml.html
+    for file in biocodeutils.read_list_file(path):
+        print("DEBUG: parsing: {0}".format(file))
+        tree = etree.parse(file)
+        for elem in tree.iterfind('Definitions/Sequences/Sequence'):
+            qry_id = elem.attrib['id']
+
+            for feature in elem.iterfind('Feature-tables/Feature-table/Feature'):
+                title = feature.attrib['title']
+                m = re.match("(\S+) \:\: (.+)", title)
+                if m:
+                    hit_acc = m.group(1)
+                    hit_desc = m.group(2)
+                    interval = feature.find('Interval-loc')
+                    curs.execute(qry, (qry_id, hit_acc, hit_desc, interval.attrib['startpos'],
+                                       interval.attrib['endpos']))
+                else:
+                    parsing_errors += 1
+                    print("WARN: Unable to parse accession and description from title in file: {0}".format(file))
+
+    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    curs.close()
+                
+        
 def index_rapsearch2_m8(path=None, index=None):
     curs = index.cursor()
     parsing_errors = 0
@@ -669,6 +747,30 @@ def initialize_hmm_results_db(conn):
             domain_score_nc   real,
             domain_score_gc   real,
             domain_hit_eval   real
+        )
+    """)
+
+    curs.execute("""
+        CREATE TABLE data_sources (
+            id                integer primary key,
+            source_path         text
+        )
+    """)
+
+    curs.close()
+    conn.commit()
+
+def initialize_lipoprotein_motif_results_db(conn):
+    curs = conn.cursor()
+
+    curs.execute("""
+        CREATE TABLE lipoprotein_motif_hit (
+            id                integer primary key,
+            qry_id            text,
+            hit_acc           text,
+            hit_desc          text,
+            start             integer,
+            stop              integer
         )
     """)
 
