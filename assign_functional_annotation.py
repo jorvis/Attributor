@@ -128,6 +128,9 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     if 'query_cov' in ev_config:
         query_cov_cutoff = int(ev_config['query_cov'].rstrip('%'))
 
+    if 'match_cov' in ev_config:
+        match_cov_cutoff = int(ev_config['match_cov'].rstrip('%'))
+
     for id in polypeptides:
         polypeptide = polypeptides[id]
         print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
@@ -151,6 +154,14 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                         continue
                 
                 blast_annot = get_blast_result_info(conn=index_conn, accession=ev_row[0], config=config)
+
+                if match_cov_cutoff is not None:
+                    match_coverage = (ev_row[1] / blast_annot.other_attributes['ref_len'])*100
+                    if match_coverage < match_cov_cutoff:
+                        print("\tSkipping accession {0} because match coverage {1} doesn't meet cutoff {2} requirements".format(
+                            ev_row[0], match_coverage, match_cov_cutoff))
+                        continue
+                
                 annot.product_name = blast_annot.product_name
                 log_fh.write("INFO: {1}: Set product name to '{0}' from {3} hit to {2}\n".format(
                         annot.product_name, id, ev_row[0], label))
@@ -364,7 +375,7 @@ def get_blast_result_info(conn=None, accession=None, config=None):
     # This is currently specific to my uniref index.
     # First we need to get the ID from the accession
     qry = """
-          SELECT u.id, ua.accession, u.full_name, u.symbol
+          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length
           FROM uniref u
                JOIN uniref_acc ua ON u.id=ua.id
           WHERE ua.accession = ?
@@ -374,6 +385,7 @@ def get_blast_result_info(conn=None, accession=None, config=None):
         uniref_id = row[0]
         annot.product_name = row[2]
         annot.gene_symbol = row[3]
+        annot.other_attributes['ref_len'] = row[4]
 
         qry = "SELECT ec_num FROM uniref_ec WHERE id = ?"
         for ec_row in ec_curs.execute(qry, (uniref_id,)):
