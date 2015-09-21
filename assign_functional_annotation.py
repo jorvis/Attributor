@@ -149,16 +149,20 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 if query_cov_cutoff is not None:
                     perc_coverage = (ev_row[1] / polypeptide.length)*100
                     if perc_coverage < query_cov_cutoff:
-                        #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2} requirements".format(
+                        #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2}% requirement".format(
                         #    ev_row[0], perc_coverage, query_cov_cutoff))
                         continue
                 
                 blast_annot = get_blast_result_info(conn=index_conn, accession=ev_row[0], config=config)
 
                 if match_cov_cutoff is not None:
+                    if 'ref_len' not in blast_annot.other_attributes:
+                        print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
+                        continue
+                    
                     match_coverage = (ev_row[1] / blast_annot.other_attributes['ref_len'])*100
                     if match_coverage < match_cov_cutoff:
-                        print("\tSkipping accession {0} because match coverage {1} doesn't meet cutoff {2} requirements".format(
+                        print("\tSkipping accession {0} because match coverage {1} doesn't meet cutoff {2}% requirement".format(
                             ev_row[0], match_coverage, match_cov_cutoff))
                         continue
                 
