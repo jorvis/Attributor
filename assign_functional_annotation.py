@@ -30,7 +30,6 @@ def main():
     parser = argparse.ArgumentParser( description='Assigns functional annotation based on user-configurable evidence tiers')
 
     ## output file to be written
-    parser.add_argument('-f', '--input_fasta', type=str, required=True, help='Protein FASTA file of source molecules' )
     parser.add_argument('-c', '--config_file', type=str, required=True, help='Configuration file for annotation' )
     parser.add_argument('-o', '--output_base', type=str, required=True, help='Base name/path of output files to be created' )
     args = parser.parse_args()
@@ -46,7 +45,7 @@ def main():
     db_conn = dict()
 
     # this is a dict of biothings.Polypeptide objects
-    polypeptides = initialize_polypeptides(sources_log_fh, args.input_fasta, default_product_name)
+    polypeptides = initialize_polypeptides(sources_log_fh, configuration['input']['fasta'], default_product_name)
 
     for label in configuration['order']:
         if label not in evidence:
@@ -353,9 +352,13 @@ def check_configuration(conf):
     before most of the rest of the script to save wasted compute time.
     """
     # make sure each of the expected sections are there
-    for section in ['general', 'indexes', 'order', 'evidence']:
+    for section in ['general', 'indexes', 'input', 'order', 'evidence']:
         if section not in conf:
             raise Exception("ERROR: Expected a section called '{0}' in the annotation config file, but didn't find one.".format(section))
+
+    # make sure the input section has at least fasta defined
+    if 'fasta' not in conf['input']:
+        raise Exception("ERROR: You must at least defined 'fasta' data in the 'input' section of the annotation config file")
 
     # make sure there aren't any indexes referenced in the evidence section which are not defined in the indexes section
     indexes = list()
@@ -364,7 +367,7 @@ def check_configuration(conf):
 
     for item in conf['evidence']:
         if 'index' in item and item['index'] not in indexes:
-            raise Exception("ERROR: Evidence item '{0}' references and index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
+            raise Exception("ERROR: Evidence item '{0}' references an index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
 
 def get_blast_result_info(conn=None, accession=None, config=None):
