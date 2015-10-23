@@ -17,6 +17,7 @@ http://imgur.com/1odYcT5
 
 import argparse
 import bioannotation
+import biocodegff
 import biocodeutils
 import biothings
 import math
@@ -32,20 +33,21 @@ def main():
     ## output file to be written
     parser.add_argument('-c', '--config_file', type=str, required=True, help='Configuration file for annotation' )
     parser.add_argument('-o', '--output_base', type=str, required=True, help='Base name/path of output files to be created' )
+    parser.add_argument('-f', '--output_format', type=str, required=False, default='gff3', help='Desired output format' )
     args = parser.parse_args()
 
     sources_log_fh = open("{0}.sources.log".format(args.output_base), 'wt')
 
     configuration = yaml.load(open(args.config_file).read())
-    check_configuration(configuration)
-    evidence = parse_evidence_config( configuration )
+    check_configuration(configuration, args)
+    evidence = parse_evidence_config(configuration)
     default_product_name = configuration['general']['default_product_name']
 
     # stores any active SQLite3 db connections
     db_conn = dict()
 
     # this is a dict of biothings.Polypeptide objects
-    polypeptides = initialize_polypeptides(sources_log_fh, configuration['input']['fasta'], default_product_name)
+    polypeptides = initialize_polypeptides(sources_log_fh, configuration['input']['polypeptide_fasta'], default_product_name)
 
     for label in configuration['order']:
         if label not in evidence:
@@ -83,10 +85,21 @@ def main():
 
     perform_final_checks(polypeptides=polypeptides, config=configuration, log_fh=sources_log_fh)
 
-    # Write the FASTA
+    # Write the output
     polyset = biothings.PolypeptideSet()
     polyset.load_from_dict(polypeptides)
-    polyset.write_fasta(path="{0}.faa".format(args.output_base))
+    
+    if args.output_format == 'fasta':
+        polyset.write_fasta(path="{0}.faa".format(args.output_base))
+    elif args.output_format == 'gff3':
+        ## parse input GFF
+        (assemblies, ref_features) = biocodegff.get_gff3_features( configuration['input']['gff3'] )
+
+        ## merge annotation with polypeptide collection
+        biocodegff.add_annotation(features=ref_features, polypeptide_set=polyset)
+
+        ## print the new GFF
+        biocodegff.print_gff3_from_assemblies(assemblies=assemblies, ofh=open("{0}.gff3".format(args.output_base), 'wt'))
 
     
 def already_indexed(path=None, index=None):
@@ -346,7 +359,7 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     ev_curs.close()
 
 
-def check_configuration(conf):
+def check_configuration(conf, userargs):
     """
     Performs any basic checks on the annotation configuration file format/syntax/values.  Ideally done
     before most of the rest of the script to save wasted compute time.
@@ -357,9 +370,20 @@ def check_configuration(conf):
             raise Exception("ERROR: Expected a section called '{0}' in the annotation config file, but didn't find one.".format(section))
 
     # make sure the input section has at least fasta defined
-    if 'fasta' not in conf['input']:
-        raise Exception("ERROR: You must at least defined 'fasta' data in the 'input' section of the annotation config file")
+    if 'polypeptide_fasta' not in conf['input']:
+        raise Exception("ERROR: You must at least define 'polypeptide_fasta' data in the 'input' section of the annotation config file")
 
+    # the output format should be one of the recognized ones.
+    supported_output_formats = ['fasta', 'gff3']
+    userargs.output_format = userargs.output_format.lower()
+    if userargs.output_format not in supported_output_formats:
+        raise Exception("ERROR: The output format specified '{0}' isn't supported.  Please choose from: {1}".format(userargs.output_format,
+                                                                                                                    ", ".join(supported_output_formats)))
+    # user must have defined input GFF if they've requested GFF as output.
+    if userargs.output_format == 'gff3':
+        if 'gff3' not in conf['input'] or conf['input']['gff3'] is None or len(conf['input']['gff3']) == 0:
+            raise Exception("ERROR:  If you requested gff3 formatted output, you must specify the corresponding gff3 input file (which provides the genomic coordinates of the features involved.)")
+    
     # make sure there aren't any indexes referenced in the evidence section which are not defined in the indexes section
     indexes = list()
     for label in conf['indexes']:
