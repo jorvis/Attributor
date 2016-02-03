@@ -70,6 +70,7 @@ def main():
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
             apply_tmhmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                  ev_config=evidence[label], label=label, log_fh=sources_log_fh)
+            
         elif evidence[label]['type'] == 'lipoprotein_motif_bsml':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='lipoprotein_motif_ev', configuration=configuration,
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
@@ -521,7 +522,13 @@ def index_hmmer3_htab(path=None, index=None):
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """
 
-    for file in biocodeutils.read_list_file(path):
+    # Can pass a single file or list file.  We'll rely on the .list file extension here
+    if path.endswith('.list'):
+        paths = biocodeutils.read_list_file(path)
+    else:
+        paths = [path]
+
+    for file in paths:
         print("DEBUG: parsing: {0}".format(file))
         for line in open(file):
             line = line.rstrip()
@@ -562,8 +569,14 @@ def index_lipoprotein_motif(path=None, index=None):
           VALUES (?, ?, ?, ?, ?)
     """
 
+    # Can pass a single file or list file.  We'll rely on the .list file extension here
+    if path.endswith('.list'):
+        paths = biocodeutils.read_list_file(path)
+    else:
+        paths = [path]
+
     # http://www.diveintopython3.net/xml.html
-    for file in biocodeutils.read_list_file(path):
+    for file in paths:
         print("DEBUG: parsing: {0}".format(file))
         tree = etree.parse(file)
         for elem in tree.iterfind('Definitions/Sequences/Sequence'):
@@ -599,8 +612,14 @@ def index_rapsearch2_m8(path=None, index=None):
                                  sbj_end, perc_identity, eval, bit_score)
           VALUES (?,?,?,?,?,?,?,?,?,?)
     """
+
+    # Can pass a single file or list file.  We'll rely on the .list file extension here
+    if path.endswith('.list'):
+        paths = biocodeutils.read_list_file(path)
+    else:
+        paths = [path]
     
-    for file in biocodeutils.read_list_file(path):
+    for file in paths:
         print("DEBUG: parsing: {0}".format(file))
         for line in open(file):
             if line[0] == '#':
@@ -684,7 +703,13 @@ def index_tmhmm_raw(path=None, index=None):
        VALUES (?, ?, ?, ?)
     """
 
-    for file in biocodeutils.read_list_file(path):
+    # Can pass a single file or list file.  We'll rely on the .list file extension here
+    if path.endswith('.list'):
+        paths = biocodeutils.read_list_file(path)
+    else:
+        paths = [path]
+
+    for file in paths:
         print("DEBUG: parsing: {0}".format(file))
         last_qry_id = None
         current_hit_id = None
