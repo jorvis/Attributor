@@ -447,7 +447,11 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
         if index_label in db_conn:
             index_conn = db_conn[index_label]
         else:
-            index_conn = sqlite3.connect(configuration['indexes'][index_label])
+            try:
+                index_conn = sqlite3.connect(configuration['indexes'][index_label])
+            except sqlite3.OperationalError as e:
+                raise Exception("ERROR: Failed to connect to evidence database {0} because {1}".format(configuration['indexes'][index_label], e))
+                
             db_conn[index_label] = index_conn
 
     # Attach to or create an evidence database
