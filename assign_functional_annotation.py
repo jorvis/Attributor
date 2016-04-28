@@ -144,6 +144,10 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     if 'match_cov' in ev_config:
         match_cov_cutoff = int(ev_config['match_cov'].rstrip('%'))
 
+    percent_identity_cutoff = None
+    if 'percent_identity_cutoff' in ev_config:
+        percent_identity_cutoff = int(ev_config['percent_identity_cutoff'].rstrip('%'))
+
     for id in polypeptides:
         polypeptide = polypeptides[id]
         print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
@@ -160,10 +164,16 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
                 if query_cov_cutoff is not None:
-                    perc_coverage = (ev_row[1] / polypeptide.length)*100
+                    perc_coverage = (ev_row[1] / polypeptide.length) * 100
                     if perc_coverage < query_cov_cutoff:
                         #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2}% requirement".format(
                         #    ev_row[0], perc_coverage, query_cov_cutoff))
+                        continue
+
+                if percent_identity_cutoff is not None:
+                    if ev_row[2] < percent_identity_cutoff:
+                        #print("\tSkipping accession {0} because PCT ID {1} doesn't meet cutoff {2}% requirement".format(
+                        #    ev_row[0], ev_row[1], percent_identity_cutoff))
                         continue
 
                 ## This is completely crap that we have to do this, and is a byproduct of the fact that the
