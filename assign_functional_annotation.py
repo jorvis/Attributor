@@ -166,23 +166,23 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 if query_cov_cutoff is not None:
                     perc_coverage = (ev_row[1] / polypeptide.length) * 100
                     if perc_coverage < query_cov_cutoff:
-                        #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2}% requirement".format(
-                        #    ev_row[0], perc_coverage, query_cov_cutoff))
+                        print("\tSkipping accession {0} because coverage {1}% doesn't meet cutoff {2}% requirement".format(
+                            ev_row[0], perc_coverage, query_cov_cutoff))
                         continue
 
                 if percent_identity_cutoff is not None:
                     if ev_row[2] < percent_identity_cutoff:
-                        #print("\tSkipping accession {0} because PCT ID {1} doesn't meet cutoff {2}% requirement".format(
-                        #    ev_row[0], ev_row[1], percent_identity_cutoff))
+                        print("\tSkipping accession {0} because percent identity of {1}% doesn't meet cutoff {2}% requirement".format(
+                            ev_row[0], ev_row[2], percent_identity_cutoff))
                         continue
 
                 ## This is completely crap that we have to do this, and is a byproduct of the fact that the
                 #   database metadata indexing tools create different table names 
-                m = re.match('uniref', label, re.I)
+                m = re.search('uniref', label, re.I)
                 if m:
                     blast_annot = get_uniref_accession_info(conn=index_conn, accession=ev_row[0], config=config)
                 else:
-                    m = re.match('sprot', label, re.I)
+                    m = re.search('sprot', label, re.I)
                     if m:
                         blast_annot = get_sprot_accession_info(conn=index_conn, accession=ev_row[0], config=config)
                     else:
@@ -195,7 +195,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     
                     match_coverage = (ev_row[1] / blast_annot.other_attributes['ref_len'])*100
                     if match_coverage < match_cov_cutoff:
-                        print("\tSkipping accession {0} because match coverage {1} doesn't meet cutoff {2}% requirement".format(
+                        print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
                             ev_row[0], match_coverage, match_cov_cutoff))
                         continue
                 
@@ -429,18 +429,21 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
           WHERE ua.accession = ?
           """
 
-    for row in curs.execute(qry, (accession,)):
-        uniref_id = row[0]
+    # accession is in the format: sp|A4YVG3|RRF_BRASO
+    abbrev, sprot_acc, sprot_id = accession.split('|')
+    
+    for row in curs.execute(qry, (sprot_acc,)):
+        sprot_id = row[0]
         annot.product_name = row[2]
         annot.gene_symbol = row[3]
         annot.other_attributes['ref_len'] = row[4]
 
         qry = "SELECT ec_num FROM uniprot_sprot_ec WHERE id = ?"
-        for ec_row in ec_curs.execute(qry, (uniref_id,)):
+        for ec_row in ec_curs.execute(qry, (sprot_id,)):
             annot.add_ec_number( bioannotation.ECAnnotation(number=ec_row[0]) )
 
         qry = "SELECT go_id FROM uniprot_sprot_go WHERE id = ?"
-        for go_row in go_curs.execute(qry, (uniref_id,)):
+        for go_row in go_curs.execute(qry, (sprot_id,)):
             annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
     curs.close()
