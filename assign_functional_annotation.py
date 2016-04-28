@@ -123,7 +123,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     ev_conn: SQLite3 connection to the parsed BLAST(ish) search evidence db for this set of searches
     config: The yaml object for the parsed annotation config file
     ev_config: The parsed evidence section for this label within the annotation config file
-    label: Label for the evidence track entry within thet annotation config file
+    label: Label for the evidence track entry within the annotation config file
     index_conn:  SQLite3 connection to the reference index for the database searched
     """
     default_product = config['general']['default_product_name']
@@ -165,8 +165,18 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                         #print("\tSkipping accession {0} because coverage {1} doesn't meet cutoff {2}% requirement".format(
                         #    ev_row[0], perc_coverage, query_cov_cutoff))
                         continue
-                
-                blast_annot = get_blast_result_info(conn=index_conn, accession=ev_row[0], config=config)
+
+                ## This is completely crap that we have to do this, and is a byproduct of the fact that the
+                #   database metadata indexing tools create different table names 
+                m = re.match('uniref', label, re.I)
+                if m:
+                    blast_annot = get_uniref_accession_info(conn=index_conn, accession=ev_row[0], config=config)
+                else:
+                    m = re.match('sprot', label, re.I)
+                    if m:
+                        blast_annot = get_sprot_accession_info(conn=index_conn, accession=ev_row[0], config=config)
+                    else:
+                        raise Exception("ERROR: Expected search index label '{0}' to contain either 'uniref' or 'sprot' in order to know which metadatadb to use.".format(label))
 
                 if match_cov_cutoff is not None:
                     if 'ref_len' not in blast_annot.other_attributes:
@@ -395,7 +405,40 @@ def check_configuration(conf, userargs):
             raise Exception("ERROR: Evidence item '{0}' references an index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
 
-def get_blast_result_info(conn=None, accession=None, config=None):
+def get_sprot_accession_info(conn=None, accession=None, config=None):
+    curs = conn.cursor()
+    ec_curs = conn.cursor()
+    go_curs = conn.cursor()
+    annot = bioannotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
+
+    # First we need to get the ID from the accession
+    qry = """
+          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length
+          FROM uniprot_sprot u
+               JOIN uniprot_sprot_acc ua ON u.id=ua.id
+          WHERE ua.accession = ?
+          """
+
+    for row in curs.execute(qry, (accession,)):
+        uniref_id = row[0]
+        annot.product_name = row[2]
+        annot.gene_symbol = row[3]
+        annot.other_attributes['ref_len'] = row[4]
+
+        qry = "SELECT ec_num FROM uniprot_sprot_ec WHERE id = ?"
+        for ec_row in ec_curs.execute(qry, (uniref_id,)):
+            annot.add_ec_number( bioannotation.ECAnnotation(number=ec_row[0]) )
+
+        qry = "SELECT go_id FROM uniprot_sprot_go WHERE id = ?"
+        for go_row in go_curs.execute(qry, (uniref_id,)):
+            annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
+
+    curs.close()
+    ec_curs.close()
+    go_curs.close()
+    return annot
+
+def get_uniref_accession_info(conn=None, accession=None, config=None):
     curs = conn.cursor()
     ec_curs = conn.cursor()
     go_curs = conn.cursor()
@@ -404,7 +447,6 @@ def get_blast_result_info(conn=None, accession=None, config=None):
     if accession.startswith('UniRef100_'):
         accession = accession.lstrip('UniRef100_')
 
-    # This is currently specific to my uniref index.
     # First we need to get the ID from the accession
     qry = """
           SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length
