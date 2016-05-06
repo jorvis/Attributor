@@ -564,6 +564,18 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
 
     ev_db_conn.commit()
     return (index_conn, ev_db_conn)
+
+def get_files_from_path(path):
+    # Can pass a single file, list file or comma-separated combination.  We'll rely on the .list file extension here
+    path_entries = path.split(',')
+    paths = list()
+    for path in path_entries:
+        if path.endswith('.list'):
+            paths.extend(biocodeutils.read_list_file(path))
+        else:
+            paths.extend([path])
+
+    return paths
         
 def index_hmmer3_htab(path=None, index=None):
     curs = index.cursor()
@@ -577,11 +589,7 @@ def index_hmmer3_htab(path=None, index=None):
           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """
 
-    # Can pass a single file or list file.  We'll rely on the .list file extension here
-    if path.endswith('.list'):
-        paths = biocodeutils.read_list_file(path)
-    else:
-        paths = [path]
+    paths = get_files_from_path(path)
 
     for file in paths:
         print("DEBUG: parsing: {0}".format(file))
@@ -624,11 +632,7 @@ def index_lipoprotein_motif(path=None, index=None):
           VALUES (?, ?, ?, ?, ?)
     """
 
-    # Can pass a single file or list file.  We'll rely on the .list file extension here
-    if path.endswith('.list'):
-        paths = biocodeutils.read_list_file(path)
-    else:
-        paths = [path]
+    paths = get_files_from_path(path)
 
     # http://www.diveintopython3.net/xml.html
     for file in paths:
@@ -668,11 +672,7 @@ def index_rapsearch2_m8(path=None, index=None):
           VALUES (?,?,?,?,?,?,?,?,?,?)
     """
 
-    # Can pass a single file or list file.  We'll rely on the .list file extension here
-    if path.endswith('.list'):
-        paths = biocodeutils.read_list_file(path)
-    else:
-        paths = [path]
+    paths = get_files_from_path(path)
     
     for file in paths:
         print("DEBUG: parsing: {0}".format(file))
@@ -758,11 +758,7 @@ def index_tmhmm_raw(path=None, index=None):
        VALUES (?, ?, ?, ?)
     """
 
-    # Can pass a single file or list file.  We'll rely on the .list file extension here
-    if path.endswith('.list'):
-        paths = biocodeutils.read_list_file(path)
-    else:
-        paths = [path]
+    paths = get_files_from_path(path)
 
     for file in paths:
         print("DEBUG: parsing: {0}".format(file))
