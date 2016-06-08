@@ -24,6 +24,7 @@ import math
 import os
 import re
 import sqlite3
+import sys
 import xml.etree.ElementTree as etree
 import yaml
 
@@ -131,6 +132,11 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     ev_qry = "SELECT sbj_id, align_len, perc_identity, eval, bit_score FROM blast_hit WHERE qry_id = ? ORDER BY eval ASC"
 
     print("DEBUG: Applying {1} results to {0} polypeptides".format(len(polypeptides), label))
+
+    blast_class_limit = None
+    
+    if 'class' in ev_config:
+        blast_class_limit = ev_config['class']
     
     if 'debugging_polypeptide_limit' in config['general']:
         DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
@@ -188,6 +194,18 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     else:
                         raise Exception("ERROR: Expected search index label '{0}' to contain either 'uniref' or 'sprot' in order to know which metadatadb to use.".format(label))
 
+                # is there a class limitation?
+                if blast_class_limit is not None:
+                    if blast_class_limit == 'trusted':
+                        if 'is_characterized' in blast_annot.other_attributes:
+                            if blast_annot.other_attributes['is_characterized'] != 1:
+                                print("\tSkipping accession {0} because it is not characterized".format(ev_row[0]))
+                                continue
+                            else:
+                                print("\tAccepting accession {0} because it is characterized".format(ev_row[0]))
+                    else:
+                        raise Exception("ERROR: Unrecognized value ('{0}') for class in config file".format(blast_class_limit))
+                    
                 if match_cov_cutoff is not None:
                     if 'ref_len' not in blast_annot.other_attributes:
                         print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
@@ -246,6 +264,14 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     if 'class' in ev_config:
         hmm_class_limit = ev_config['class']
 
+    prepend_text = None
+    if 'prepend_text' in ev_config:
+        prepend_text = ev_config['prepend_text']
+
+    append_text = None
+    if 'append_text' in ev_config:
+        append_text = ev_config['append_text']
+
     print("DEBUG: Applying HMM results to {0} polypeptides".format(len(polypeptides)))
 
     if 'debugging_polypeptide_limit' in config['general']:
@@ -263,10 +289,11 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
         if config['general']['allow_attributes_from_multiple_sources'] == 'Yes':
             raise Exception("ERROR: Support for the general:allow_attributes_from_multiple_sources=Yes setting not yet implemented")
         else:
+            # If this has changed already, it has already been annotated
             if annot.product_name != default_product: continue
 
             for ev_row in ev_curs.execute(ev_qry, (polypeptide.id,)):
-                acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype, id FROM hmm WHERE version = ? or accession = ?"
+                acc_main_qry = "SELECT version, hmm_com_name, ec_num, isotype, id FROM hmm WHERE (version = ? or accession = ?)"
 
                 if hmm_class_limit is None:
                     acc_main_qry_args = (ev_row[0], ev_row[0], )
@@ -275,7 +302,14 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
                     acc_main_qry_args = (ev_row[0], ev_row[0], hmm_class_limit)
                 
                 for acc_main_row in acc_main_curs.execute(acc_main_qry, acc_main_qry_args):
-                    annot.product_name = acc_main_row[1]
+                    if prepend_text is None:
+                        annot.product_name = acc_main_row[1]
+                    else:
+                        annot.product_name = "{0} {1}".format(prepend_text, acc_main_row[1])
+
+                    if append_text is not None:
+                        annot.product_name = "{0} {1}".format(annot.product_name, append_text)
+                        
                     log_fh.write("INFO: {1}: Set product name to '{0}' from {3} hit to {2}, isotype:{3}\n".format(
                         annot.product_name, id, ev_row[0], hmm_class_limit, label))
 
@@ -414,6 +448,10 @@ def check_configuration(conf, userargs):
         if 'index' in item and item['index'] not in indexes:
             raise Exception("ERROR: Evidence item '{0}' references an index '{1}' not found in the indexes section of the config file".format(item['label'], item['index']))
 
+    # Any indexes defined should actually exist
+    for label in conf['indexes']:
+        if not os.path.exists(conf['indexes'][label]):
+            raise Exception("ERROR: Index with label:{0} and path:{1} couldn't be found".format(label, conf['indexes'][label]))
 
 def get_sprot_accession_info(conn=None, accession=None, config=None):
     curs = conn.cursor()
@@ -462,7 +500,7 @@ def get_uniref_accession_info(conn=None, accession=None, config=None):
 
     # First we need to get the ID from the accession
     qry = """
-          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length
+          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length, ua.is_characterized
           FROM uniref u
                JOIN uniref_acc ua ON u.id=ua.id
           WHERE ua.accession = ?
@@ -473,6 +511,7 @@ def get_uniref_accession_info(conn=None, accession=None, config=None):
         annot.product_name = row[2]
         annot.gene_symbol = row[3]
         annot.other_attributes['ref_len'] = row[4]
+        annot.other_attributes['is_characterized'] = row[5]
 
         qry = "SELECT ec_num FROM uniref_ec WHERE id = ?"
         for ec_row in ec_curs.execute(qry, (uniref_id,)):
