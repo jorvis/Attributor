@@ -137,7 +137,15 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     
     if 'class' in ev_config:
         blast_class_limit = ev_config['class']
-    
+
+    prepend_text = None
+    if 'prepend_text' in ev_config:
+        prepend_text = ev_config['prepend_text']
+
+    append_text = None
+    if 'append_text' in ev_config:
+        append_text = ev_config['append_text']
+        
     if 'debugging_polypeptide_limit' in config['general']:
         DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
 
@@ -216,8 +224,15 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                         print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
                             ev_row[0], match_coverage, match_cov_cutoff))
                         continue
-                
-                annot.product_name = blast_annot.product_name
+
+                if prepend_text is None:
+                    annot.product_name = blast_annot.product_name
+                else:
+                    annot.product_name = "{0} {1}".format(prepend_text, blast_annot.product_name)
+
+                if append_text is not None:
+                        annot.product_name = "{0} {1}".format(annot.product_name, append_text)
+
                 log_fh.write("INFO: {1}: Set product name to '{0}' from {3} hit to {2}\n".format(
                         annot.product_name, id, ev_row[0], label))
                 
