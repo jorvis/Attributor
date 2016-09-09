@@ -58,6 +58,7 @@ def main():
         if evidence[label]['type'] == 'HMMer3_htab':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='hmm_ev', configuration=configuration,
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
+            index_conn.isolation_level = None
             apply_hmm_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
                 
@@ -173,7 +174,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
     for id in polypeptides:
         polypeptide = polypeptides[id]
-        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
+        #print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
         annot = polypeptide.annotation
 
         DEBUG_LIMIT = DEBUG_LIMIT - 1
@@ -189,14 +190,14 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 if query_cov_cutoff is not None:
                     perc_coverage = (ev_row[1] / polypeptide.length) * 100
                     if perc_coverage < query_cov_cutoff:
-                        print("\tSkipping accession {0} because coverage {1}% doesn't meet cutoff {2}% requirement".format(
-                            ev_row[0], perc_coverage, query_cov_cutoff))
+                        #print("\tSkipping accession {0} because coverage {1}% doesn't meet cutoff {2}% requirement".format(
+                        #    ev_row[0], perc_coverage, query_cov_cutoff))
                         continue
 
                 if percent_identity_cutoff is not None:
                     if ev_row[2] < percent_identity_cutoff:
-                        print("\tSkipping accession {0} because percent identity of {1}% doesn't meet cutoff {2}% requirement".format(
-                            ev_row[0], ev_row[2], percent_identity_cutoff))
+                        #print("\tSkipping accession {0} because percent identity of {1}% doesn't meet cutoff {2}% requirement".format(
+                        #    ev_row[0], ev_row[2], percent_identity_cutoff))
                         continue
 
                 ## This is completely crap that we have to do this, and is a byproduct of the fact that the
@@ -216,22 +217,23 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     if blast_class_limit == 'trusted':
                         if 'is_characterized' in blast_annot.other_attributes:
                             if blast_annot.other_attributes['is_characterized'] != 1:
-                                print("\tSkipping accession {0} because it is not characterized".format(ev_row[0]))
+                                #print("\tSkipping accession {0} because it is not characterized".format(ev_row[0]))
                                 continue
                             else:
-                                print("\tAccepting accession {0} because it is characterized".format(ev_row[0]))
+                                #print("\tAccepting accession {0} because it is characterized".format(ev_row[0]))
+                                pass
                     else:
                         raise Exception("ERROR: Unrecognized value ('{0}') for class in config file".format(blast_class_limit))
                     
                 if match_cov_cutoff is not None:
                     if 'ref_len' not in blast_annot.other_attributes:
-                        print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
+                        #print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
                         continue
                     
                     match_coverage = (ev_row[1] / blast_annot.other_attributes['ref_len'])*100
                     if match_coverage < match_cov_cutoff:
-                        print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
-                            ev_row[0], match_coverage, match_cov_cutoff))
+                        #print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
+                        #    ev_row[0], match_coverage, match_cov_cutoff))
                         continue
 
                 if prepend_text is None:
@@ -247,7 +249,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 
                 annot.gene_symbol = blast_annot.gene_symbol
                 log_fh.write("INFO: {1}: Set gene_symbol to '{0}' from {3} hit to {2}\n".format(
-                        annot.product_name, id, ev_row[0], label))
+                        annot.gene_symbol, id, ev_row[0], label))
 
                 for go_annot in blast_annot.go_annotations:
                     annot.add_go_annotation(go_annot)
@@ -279,15 +281,16 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
     ev_curs = ev_conn.cursor()
     ev_qry = "SELECT hmm_accession, total_score FROM hmm_hit WHERE qry_id = ? ORDER BY total_hit_eval ASC"
 
+    acc_main_curs = index_conn.cursor()
+    acc_main_curs.execute("begin")
+    hmm_class_limit = None
+
     go_curs = index_conn.cursor()
     go_qry = "SELECT go_id FROM hmm_go WHERE hmm_id = ?"
 
     ec_curs = index_conn.cursor()
     ec_qry = "SELECT ec_id FROM hmm_ec WHERE hmm_id = ?"
     
-    acc_main_curs = index_conn.cursor()
-    hmm_class_limit = None
-
     if 'class' in ev_config:
         hmm_class_limit = ev_config['class']
 
@@ -305,7 +308,7 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
         DEBUG_LIMIT = config['general']['debugging_polypeptide_limit']
     
     for id in polypeptides:
-        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
+        #print("DEBUG: Parsing {0} evidence for polypeptide ID {1}".format(label, id))
         polypeptide = polypeptides[id]
         annot = polypeptide.annotation
 
@@ -652,7 +655,7 @@ def index_hmmer3_htab(path=None, index=None):
     paths = get_files_from_path(path)
 
     for file in paths:
-        print("DEBUG: parsing: {0}".format(file))
+        print("INFO: parsing: {0}".format(file))
         for line in open(file):
             line = line.rstrip()
             cols = line.split("\t")
@@ -696,7 +699,7 @@ def index_lipoprotein_motif(path=None, index=None):
 
     # http://www.diveintopython3.net/xml.html
     for file in paths:
-        print("DEBUG: parsing: {0}".format(file))
+        print("INFO: parsing: {0}".format(file))
         tree = etree.parse(file)
         for elem in tree.iterfind('Definitions/Sequences/Sequence'):
             qry_id = elem.attrib['id']
@@ -735,7 +738,7 @@ def index_rapsearch2_m8(path=None, index=None):
     paths = get_files_from_path(path)
     
     for file in paths:
-        print("DEBUG: parsing: {0}".format(file))
+        print("INFO: parsing: {0}".format(file))
         for line in open(file):
             if line[0] == '#':
                 m = re.search('log\(e\-value\)', line)
@@ -821,7 +824,7 @@ def index_tmhmm_raw(path=None, index=None):
     paths = get_files_from_path(path)
 
     for file in paths:
-        print("DEBUG: parsing: {0}".format(file))
+        print("INFO: parsing: {0}".format(file))
         last_qry_id = None
         current_hit_id = None
         current_path = list()
