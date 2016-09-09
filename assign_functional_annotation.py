@@ -20,6 +20,7 @@ import bioannotation
 import biocodegff
 import biocodeutils
 import biothings
+import cProfile
 import math
 import os
 import re
@@ -63,6 +64,7 @@ def main():
         elif evidence[label]['type'] == 'RAPSearch2_m8':
             index_conn, ev_db_conn = get_or_create_db_connections(type_ev='blast_ev', configuration=configuration,
                                          evidence=evidence, label=label, db_conn=db_conn, output_base=args.output_base)
+            index_conn.isolation_level = None
             apply_blast_evidence(polypeptides=polypeptides, ev_conn=ev_db_conn, config=configuration,
                                  ev_config=evidence[label], label=label, index_conn=index_conn, log_fh=sources_log_fh)
 
@@ -129,6 +131,13 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     """
     default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
+
+    # Doing all the cursors here prevents doing it repeatedly within calling each accession.  Huge performance improvement.
+    index_acc_curs = index_conn.cursor()
+    index_acc_curs.execute("begin")
+    index_ec_curs = index_conn.cursor()
+    index_go_curs = index_conn.cursor()
+
     ev_qry = "SELECT sbj_id, align_len, perc_identity, eval, bit_score FROM blast_hit WHERE qry_id = ? ORDER BY eval ASC"
 
     print("DEBUG: Applying {1} results to {0} polypeptides".format(len(polypeptides), label))
@@ -194,7 +203,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 #   database metadata indexing tools create different table names 
                 m = re.search('uniref', label, re.I)
                 if m:
-                    blast_annot = get_uniref_accession_info(conn=index_conn, accession=ev_row[0], config=config)
+                    blast_annot = get_uniref_accession_info(conn=index_conn, accession=ev_row[0], config=config, acc_curs=index_acc_curs, ec_curs=index_ec_curs, go_curs=index_go_curs)
                 else:
                     m = re.search('sprot', label, re.I)
                     if m:
@@ -250,6 +259,9 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 break
 
     ev_curs.close()
+    index_acc_curs.close()
+    index_ec_curs.close()
+    index_go_curs.close()
                 
     
 def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=None, label=None, index_conn=None, log_fh=None):
@@ -504,10 +516,7 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
     go_curs.close()
     return annot
 
-def get_uniref_accession_info(conn=None, accession=None, config=None):
-    curs = conn.cursor()
-    ec_curs = conn.cursor()
-    go_curs = conn.cursor()
+def get_uniref_accession_info(conn=None, accession=None, config=None, acc_curs=None, ec_curs=None, go_curs=None):
     annot = bioannotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
 
     if accession.startswith('UniRef100_'):
@@ -521,7 +530,7 @@ def get_uniref_accession_info(conn=None, accession=None, config=None):
           WHERE ua.accession = ?
           """
 
-    for row in curs.execute(qry, (accession,)):
+    for row in acc_curs.execute(qry, (accession,)):
         uniref_id = row[0]
         annot.product_name = row[2]
         annot.gene_symbol = row[3]
@@ -536,9 +545,6 @@ def get_uniref_accession_info(conn=None, accession=None, config=None):
         for go_row in go_curs.execute(qry, (uniref_id,)):
             annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
-    curs.close()
-    ec_curs.close()
-    go_curs.close()
     return annot
         
 def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None, label=None,
@@ -1079,7 +1085,7 @@ class Match(object):
         return self.m is not None 
 
 if __name__ == '__main__':
-    main()
+    cProfile.run('main()', "FALCON.profile.{0}.dat".format(os.getpid()))
 
 
 
