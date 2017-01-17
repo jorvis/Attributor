@@ -16,14 +16,16 @@ http://imgur.com/1odYcT5
 """
 
 import argparse
-import bioannotation
-import biocodegff
-import biocodeutils
-import biothings
 import cProfile
 import math
 import os
 import re
+
+import biocode.annotation
+import biocode.gff
+import biocode.utils
+import biocode.things
+
 import sqlite3
 import sys
 import xml.etree.ElementTree as etree
@@ -91,20 +93,20 @@ def main():
     perform_final_checks(polypeptides=polypeptides, config=configuration, log_fh=sources_log_fh)
 
     # Write the output
-    polyset = biothings.PolypeptideSet()
+    polyset = biocode.things.PolypeptideSet()
     polyset.load_from_dict(polypeptides)
     
     if args.output_format == 'fasta':
         polyset.write_fasta(path="{0}.faa".format(args.output_base))
     elif args.output_format == 'gff3':
         ## parse input GFF
-        (assemblies, ref_features) = biocodegff.get_gff3_features( configuration['input']['gff3'] )
+        (assemblies, ref_features) = biocode.gff.get_gff3_features( configuration['input']['gff3'] )
 
         ## merge annotation with polypeptide collection
-        biocodegff.add_annotation(features=ref_features, polypeptide_set=polyset)
+        biocode.gff.add_annotation(features=ref_features, polypeptide_set=polyset)
 
         ## print the new GFF
-        biocodegff.print_gff3_from_assemblies(assemblies=assemblies, ofh=open("{0}.gff3".format(args.output_base), 'wt'))
+        biocode.gff.print_gff3_from_assemblies(assemblies=assemblies, ofh=open("{0}.gff3".format(args.output_base), 'wt'))
 
     
 def already_indexed(path=None, index=None):
@@ -350,11 +352,11 @@ def apply_hmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config=N
 
                     ## add any matching GO terms
                     for go_row in go_curs.execute(go_qry, (acc_main_row[4],)):
-                        annot.add_go_annotation(bioannotation.GOAnnotation(go_id=go_row[0]))
+                        annot.add_go_annotation(biocode.annotation.GOAnnotation(go_id=go_row[0]))
 
                     ## add any matching EC numbers
                     for ec_row in ec_curs.execute(ec_qry, (acc_main_row[4],)):
-                        annot.add_ec_number(bioannotation.ECAnnotation(number=ec_row[0]))
+                        annot.add_ec_number(biocode.annotation.ECAnnotation(number=ec_row[0]))
                     
                 break
         
@@ -438,7 +440,7 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     annot.product_name = tmhmm_default_product
                     log_fh.write("INFO: {0}: Set product name to '{1}' because it had a TMHMM prediction of {2} transmembrane helices\n".format(
                             id, tmhmm_default_product, ev_row[1]))
-                    annot.add_go_annotation( bioannotation.GOAnnotation(go_id='0016021') )
+                    annot.add_go_annotation( annotation.GOAnnotation(go_id='0016021') )
                     break
 
     ev_curs.close()
@@ -487,7 +489,7 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
     curs = conn.cursor()
     ec_curs = conn.cursor()
     go_curs = conn.cursor()
-    annot = bioannotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
+    annot = biocode.annotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
 
     # First we need to get the ID from the accession
     qry = """
@@ -508,11 +510,11 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
 
         qry = "SELECT ec_num FROM uniprot_sprot_ec WHERE id = ?"
         for ec_row in ec_curs.execute(qry, (sprot_id,)):
-            annot.add_ec_number( bioannotation.ECAnnotation(number=ec_row[0]) )
+            annot.add_ec_number( annotation.ECAnnotation(number=ec_row[0]) )
 
         qry = "SELECT go_id FROM uniprot_sprot_go WHERE id = ?"
         for go_row in go_curs.execute(qry, (sprot_id,)):
-            annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
+            annot.add_go_annotation( annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
     curs.close()
     ec_curs.close()
@@ -520,7 +522,7 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
     return annot
 
 def get_uniref_accession_info(conn=None, accession=None, config=None, acc_curs=None, ec_curs=None, go_curs=None):
-    annot = bioannotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
+    annot = biocode.annotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
 
     if accession.startswith('UniRef100_'):
         accession = accession.lstrip('UniRef100_')
@@ -542,11 +544,11 @@ def get_uniref_accession_info(conn=None, accession=None, config=None, acc_curs=N
 
         qry = "SELECT ec_num FROM uniref_ec WHERE id = ?"
         for ec_row in ec_curs.execute(qry, (uniref_id,)):
-            annot.add_ec_number( bioannotation.ECAnnotation(number=ec_row[0]) )
+            annot.add_ec_number( biocode.annotation.ECAnnotation(number=ec_row[0]) )
 
         qry = "SELECT go_id FROM uniref_go WHERE id = ?"
         for go_row in go_curs.execute(qry, (uniref_id,)):
-            annot.add_go_annotation( bioannotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
+            annot.add_go_annotation( biocode.annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
     return annot
         
@@ -634,7 +636,7 @@ def get_files_from_path(path):
     paths = list()
     for path in path_entries:
         if path.endswith('.list'):
-            paths.extend(biocodeutils.read_list_file(path))
+            paths.extend(biocode.utils.read_list_file(path))
         else:
             paths.extend([path])
 
@@ -1015,13 +1017,13 @@ def initialize_polypeptides( log_fh, fasta_file, default_name ):
     Reads a FASTA file of (presumably) polypeptide sequences and creates a dict of Polypeptide
     objects, keyed by ID, with bioannotation.FunctionalAnnotation objects attached.
     '''
-    seqs = biocodeutils.fasta_dict_from_file( fasta_file )
+    seqs = biocode.utils.fasta_dict_from_file( fasta_file )
 
     polypeptides = dict()
 
     for seq_id in seqs:
-        polypeptide = biothings.Polypeptide( id=seq_id, length=len(seqs[seq_id]['s']), residues=seqs[seq_id]['s'] )
-        annotation = bioannotation.FunctionalAnnotation(product_name=default_name)
+        polypeptide = biocode.things.Polypeptide( id=seq_id, length=len(seqs[seq_id]['s']), residues=seqs[seq_id]['s'] )
+        annotation = biocode.annotation.FunctionalAnnotation(product_name=default_name)
         log_fh.write("INFO: {0}: Set initial product name to '{1}'\n".format(seq_id, default_name))
         polypeptide.annotation = annotation
         
