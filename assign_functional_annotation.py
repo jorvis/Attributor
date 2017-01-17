@@ -440,7 +440,7 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     annot.product_name = tmhmm_default_product
                     log_fh.write("INFO: {0}: Set product name to '{1}' because it had a TMHMM prediction of {2} transmembrane helices\n".format(
                             id, tmhmm_default_product, ev_row[1]))
-                    annot.add_go_annotation( annotation.GOAnnotation(go_id='0016021') )
+                    annot.add_go_annotation( biocode.annotation.GOAnnotation(go_id='0016021') )
                     break
 
     ev_curs.close()
@@ -510,11 +510,11 @@ def get_sprot_accession_info(conn=None, accession=None, config=None):
 
         qry = "SELECT ec_num FROM uniprot_sprot_ec WHERE id = ?"
         for ec_row in ec_curs.execute(qry, (sprot_id,)):
-            annot.add_ec_number( annotation.ECAnnotation(number=ec_row[0]) )
+            annot.add_ec_number( biocode.annotation.ECAnnotation(number=ec_row[0]) )
 
         qry = "SELECT go_id FROM uniprot_sprot_go WHERE id = ?"
         for go_row in go_curs.execute(qry, (sprot_id,)):
-            annot.add_go_annotation( annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
+            annot.add_go_annotation( biocode.annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
     curs.close()
     ec_curs.close()
