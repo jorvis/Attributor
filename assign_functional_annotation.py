@@ -132,6 +132,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     label: Label for the evidence track entry within the annotation config file
     index_conn:  SQLite3 connection to the reference index for the database searched
     """
+    print("DEBUG: Processing BLAST evidence tier label: {0}".format(label))
     default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
 
@@ -176,7 +177,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
     for id in polypeptides:
         polypeptide = polypeptides[id]
-        #print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
+        print("DEBUG: Parsing {0} evidence for polypeptide ID {1}, length: {2}".format(label, id, polypeptide.length))
         annot = polypeptide.annotation
 
         DEBUG_LIMIT = DEBUG_LIMIT - 1
@@ -192,14 +193,14 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                 if query_cov_cutoff is not None:
                     perc_coverage = (ev_row[1] / polypeptide.length) * 100
                     if perc_coverage < query_cov_cutoff:
-                        #print("\tSkipping accession {0} because coverage {1}% doesn't meet cutoff {2}% requirement".format(
-                        #    ev_row[0], perc_coverage, query_cov_cutoff))
+                        print("\tSkipping accession {0} because coverage {1}% doesn't meet cutoff {2}% requirement".format(
+                            ev_row[0], perc_coverage, query_cov_cutoff))
                         continue
 
                 if percent_identity_cutoff is not None:
                     if ev_row[2] < percent_identity_cutoff:
-                        #print("\tSkipping accession {0} because percent identity of {1}% doesn't meet cutoff {2}% requirement".format(
-                        #    ev_row[0], ev_row[2], percent_identity_cutoff))
+                        print("\tSkipping accession {0} because percent identity of {1}% doesn't meet cutoff {2}% requirement".format(
+                            ev_row[0], ev_row[2], percent_identity_cutoff))
                         continue
 
                 ## This is completely crap that we have to do this, and is a byproduct of the fact that the
@@ -219,23 +220,23 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                     if blast_class_limit == 'trusted':
                         if 'is_characterized' in blast_annot.other_attributes:
                             if blast_annot.other_attributes['is_characterized'] != 1:
-                                #print("\tSkipping accession {0} because it is not characterized".format(ev_row[0]))
+                                print("\tSkipping accession {0} because it is not characterized".format(ev_row[0]))
                                 continue
                             else:
-                                #print("\tAccepting accession {0} because it is characterized".format(ev_row[0]))
+                                print("\tAccepting accession {0} because it is characterized".format(ev_row[0]))
                                 pass
                     else:
                         raise Exception("ERROR: Unrecognized value ('{0}') for class in config file".format(blast_class_limit))
                     
                 if match_cov_cutoff is not None:
                     if 'ref_len' not in blast_annot.other_attributes:
-                        #print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
+                        print("\tSkipping accession {0} because length wasn't found".format(ev_row[0]))
                         continue
                     
                     match_coverage = (ev_row[1] / blast_annot.other_attributes['ref_len'])*100
                     if match_coverage < match_cov_cutoff:
-                        #print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
-                        #    ev_row[0], match_coverage, match_cov_cutoff))
+                        print("\tSkipping accession {0} because match coverage {1}% doesn't meet cutoff {2}% requirement".format(
+                            ev_row[0], match_coverage, match_cov_cutoff))
                         continue
 
                 if prepend_text is None:
