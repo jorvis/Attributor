@@ -446,6 +446,38 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
     ev_curs.close()
 
+def cache_hmm_hit_data(accession=None, ev_index=None, ref_index=None):
+    """
+    Checks to see if annotation for that HMM is stored within the evidence index.  If not,
+    the relevant entries from the reference are copied.
+    """
+    ref_qry = """
+          SELECT id, accession, version, name, hmm_com_name, hmm_len, hmm_comment, trusted_global_cutoff,
+                  trusted_domain_cutoff, noise_global_cutoff, noise_domain_cutoff, gathering_global_cutoff,
+                  gathering_domain_cutoff, ec_num, gene_symbol, isotype
+            FROM hmm
+           WHERE version = ?
+    """
+
+    ev_qry = """
+          INSERT INTO hmm (id, accession, version, name, hmm_com_name, hmm_len, hmm_comment, trusted_global_cutoff,
+                  trusted_domain_cutoff, noise_global_cutoff, noise_domain_cutoff, gathering_global_cutoff,
+                  gathering_domain_cutoff, ec_num, gene_symbol, isotype)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    ref_curs = ref_index.cursor()
+    ev_curs = ev_index.cursor()
+
+    ref_curs.execute(ref_qry, (accession,))
+    hmm_row = ref_curs.fetchone()
+    if hmm_row is not None:
+        ev_curs.execute(ev_qry, hmm_row)
+        print("Caching HMM data for accession: {0}".format(accession))
+
+    ref_curs.close()
+    ev_curs.close()
+
 
 def check_configuration(conf, userargs):
     """
@@ -597,7 +629,7 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
     if not already_indexed(path=evidence[label]['path'], index=ev_db_conn):
 
         if type_ev == 'hmm_ev':
-            index_hmmer3_htab(path=evidence[label]['path'], index=ev_db_conn)
+            index_hmmer3_htab(path=evidence[label]['path'], index=ev_db_conn, refindex=index_conn)
             ev_db_conn.commit()
             # update the database search indexes
             hmm_ev_db_curs = ev_db_conn.cursor()
@@ -643,7 +675,7 @@ def get_files_from_path(path):
 
     return paths
         
-def index_hmmer3_htab(path=None, index=None):
+def index_hmmer3_htab(path=None, index=None, refindex=None):
     curs = index.cursor()
     parsing_errors = 0
 
@@ -656,6 +688,8 @@ def index_hmmer3_htab(path=None, index=None):
     """
 
     paths = get_files_from_path(path)
+
+    hmm_accs_found = dict()
 
     for file in paths:
         print("INFO: parsing: {0}".format(file))
@@ -675,13 +709,16 @@ def index_hmmer3_htab(path=None, index=None):
                     try:
                         cols[i] = float(cols[i])
                     except ValueError:
-                        #print("DEBUG: Could not convert this to a float: {0}".format(cols[i]))
                         parsing_errors += 1
                         cols[i] = None
                 
             curs.execute(qry, (cols[5], cols[8], cols[9], cols[0], int(cols[2]), cols[6], cols[7], 
                                cols[11], float(cols[12]), float(cols[17]), float(cols[18]), float(cols[23]),
                                float(cols[21]), float(cols[22]), float(cols[24]), cols[19], cols[20]))
+
+            if cols[0] not in hmm_accs_found:
+                cache_hmm_hit_data(accession=cols[0], ev_index=index, ref_index=refindex)
+                hmm_accs_found[cols[0]] = True
 
     curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
     curs.close()
@@ -937,6 +974,43 @@ def initialize_hmm_results_db(conn):
             domain_score_gc   real,
             domain_hit_eval   real
         )
+    """)
+
+    curs.execute("""
+              CREATE TABLE hmm (
+                 id                integer primary key autoincrement,
+                 accession         text,
+                 version           text,
+                 name              text,
+                 hmm_com_name      text,
+                 hmm_len           int,
+                 hmm_comment       text,
+                 trusted_global_cutoff    float,
+                 trusted_domain_cutoff   float,
+                 noise_global_cutoff      float,
+                 noise_domain_cutoff     float,
+                 gathering_global_cutoff  float,
+                 gathering_domain_cutoff float,
+                 ec_num            text,
+                 gene_symbol       text,
+                 isotype           text
+              )
+    """)
+
+    curs.execute("""
+              CREATE TABLE hmm_go (
+                 id     integer primary key autoincrement,
+                 hmm_id int not NULL,
+                 go_id  text
+              )
+    """)
+
+    curs.execute("""
+              CREATE TABLE hmm_ec (
+                 id     integer primary key autoincrement,
+                 hmm_id int not NULL,
+                 ec_id  text
+              )
     """)
 
     curs.execute("""
