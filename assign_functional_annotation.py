@@ -446,7 +446,25 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
     ev_curs.close()
 
-def cache_hmm_hit_data(accession=None, ev_index=None, ref_index=None):
+def cache_ev_hmm_version_accessions(idx):
+    """
+    Creates a list of the HMM version entries whose reference annotation attributes have already
+    been stored within this portable evidence DB.
+    """
+    ev_qry = "SELECT version FROM hmm"
+    ev_curs = idx.cursor()
+    ev_curs.execute(ev_qry)
+
+    versions = dict()
+    
+    for row in ev_curs:
+        print("Pre-stored version: {0}".format(row[0]))
+        versions[row[0]] = True
+
+    return versions
+    
+
+def cache_hmm_hit_data(version=None, ev_index=None, ref_index=None):
     """
     Checks to see if annotation for that HMM is stored within the evidence index.  If not,
     the relevant entries from the reference are copied.
@@ -459,6 +477,12 @@ def cache_hmm_hit_data(accession=None, ev_index=None, ref_index=None):
            WHERE version = ?
     """
 
+    ref_go_select_qry = """
+          SELECT id, hmm_id, go_id
+            FROM hmm_go
+           WHERE hmm_id = ?
+    """
+
     ev_qry = """
           INSERT INTO hmm (id, accession, version, name, hmm_com_name, hmm_len, hmm_comment, trusted_global_cutoff,
                   trusted_domain_cutoff, noise_global_cutoff, noise_domain_cutoff, gathering_global_cutoff,
@@ -466,15 +490,22 @@ def cache_hmm_hit_data(accession=None, ev_index=None, ref_index=None):
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
+    ev_go_insert_qry = "INSERT INTO hmm_go (id, hmm_id, go_id) VALUES (?, ?, ?)"
+
     ref_curs = ref_index.cursor()
     ev_curs = ev_index.cursor()
+    ref_go_curs = ref_index.cursor()
 
-    ref_curs.execute(ref_qry, (accession,))
+    ref_curs.execute(ref_qry, (version,))
     hmm_row = ref_curs.fetchone()
     if hmm_row is not None:
         ev_curs.execute(ev_qry, hmm_row)
-        print("Caching HMM data for accession: {0}".format(accession))
+        ref_go_curs.execute(ref_go_select_qry, (hmm_row[0],))
 
+        for hmm_go_row in ref_go_curs:
+            ev_curs.execute(ev_go_insert_qry, hmm_go_row)
+
+    ref_go_curs.close()
     ref_curs.close()
     ev_curs.close()
 
@@ -629,7 +660,7 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
     if not already_indexed(path=evidence[label]['path'], index=ev_db_conn):
 
         if type_ev == 'hmm_ev':
-            index_hmmer3_htab(path=evidence[label]['path'], index=ev_db_conn, refindex=index_conn)
+            index_hmmer3_htab(path=evidence[label]['path'], ev_index=ev_db_conn, ref_index=index_conn)
             ev_db_conn.commit()
             # update the database search indexes
             hmm_ev_db_curs = ev_db_conn.cursor()
@@ -675,8 +706,8 @@ def get_files_from_path(path):
 
     return paths
         
-def index_hmmer3_htab(path=None, index=None, refindex=None):
-    curs = index.cursor()
+def index_hmmer3_htab(path=None, index=None, ev_index=None, ref_index=None):
+    curs = ev_index.cursor()
     parsing_errors = 0
 
     qry = """
@@ -688,8 +719,7 @@ def index_hmmer3_htab(path=None, index=None, refindex=None):
     """
 
     paths = get_files_from_path(path)
-
-    hmm_accs_found = dict()
+    hmm_versions_found = cache_ev_hmm_version_accessions(ev_index)
 
     for file in paths:
         print("INFO: parsing: {0}".format(file))
@@ -716,9 +746,10 @@ def index_hmmer3_htab(path=None, index=None, refindex=None):
                                cols[11], float(cols[12]), float(cols[17]), float(cols[18]), float(cols[23]),
                                float(cols[21]), float(cols[22]), float(cols[24]), cols[19], cols[20]))
 
-            if cols[0] not in hmm_accs_found:
-                cache_hmm_hit_data(accession=cols[0], ev_index=index, ref_index=refindex)
-                hmm_accs_found[cols[0]] = True
+            if cols[0] not in hmm_versions_found:
+                print("DEBUG: Attempting to cache hmm_hit_data for accession: {0}".format(cols[0]))
+                cache_hmm_hit_data(version=cols[0], ev_index=ev_index, ref_index=ref_index)
+                hmm_versions_found[cols[0]] = True
 
     curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
     curs.close()
