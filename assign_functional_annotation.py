@@ -38,6 +38,7 @@ def main():
     parser.add_argument('-c', '--config_file', type=str, required=True, help='Configuration file for annotation' )
     parser.add_argument('-o', '--output_base', type=str, required=True, help='Base name/path of output files to be created' )
     parser.add_argument('-f', '--output_format', type=str, required=False, default='gff3', help='Desired output format' )
+    parser.add_argument('-npp', '--no_product_processing', action="store_true", help="Pass this to turn off post-processing of gene product names")
     args = parser.parse_args()
 
     sources_log_fh = open("{0}.sources.log".format(args.output_base), 'wt')
@@ -90,12 +91,18 @@ def main():
     for label in db_conn:
         db_conn[label].close()
 
+    polyset = biocode.things.PolypeptideSet()
+    polyset.load_from_dict(polypeptides)
+        
+    # Do any post-processing
+    if not args.no_product_processing:
+        for polypeptide in polyset.polypeptides:
+            annot = polypeptide.annotation
+            annot.set_processed_product_name()
+
     perform_final_checks(polypeptides=polypeptides, config=configuration, log_fh=sources_log_fh)
 
     # Write the output
-    polyset = biocode.things.PolypeptideSet()
-    polyset.load_from_dict(polypeptides)
-    
     if args.output_format == 'fasta':
         polyset.write_fasta(path="{0}.faa".format(args.output_base))
     elif args.output_format == 'gff3':
