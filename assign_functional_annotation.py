@@ -99,6 +99,7 @@ def main():
         for polypeptide in polyset.polypeptides:
             annot = polypeptide.annotation
             annot.set_processed_product_name()
+            annot.set_processed_gene_symbol()
 
     perform_final_checks(polypeptides=polypeptides, config=configuration, log_fh=sources_log_fh)
 
