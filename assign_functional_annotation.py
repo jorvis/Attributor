@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 """
-
 This is to assign functional annotation to gene models using a wide variety of evidence.  Meant to
 support unlimited hierarchy rules, this utility relies on a user-created configuration file.
 
@@ -140,7 +139,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
     label: Label for the evidence track entry within the annotation config file
     index_conn:  SQLite3 connection to the reference index for the database searched
     """
-    print("DEBUG: Processing BLAST evidence tier label: {0}".format(label))
+    print("DEBUG: Processing BLAST (or blast-like) evidence tier label: {0}".format(label))
     default_product = config['general']['default_product_name']
     ev_curs = ev_conn.cursor()
 
@@ -211,17 +210,7 @@ def apply_blast_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
                             ev_row[0], ev_row[2], percent_identity_cutoff))
                         continue
 
-                ## This is completely crap that we have to do this, and is a byproduct of the fact that the
-                #   database metadata indexing tools create different table names 
-                m = re.search('uniref', label, re.I)
-                if m:
-                    blast_annot = get_uniref_accession_info(conn=index_conn, accession=ev_row[0], config=config, acc_curs=index_acc_curs, ec_curs=index_ec_curs, go_curs=index_go_curs)
-                else:
-                    m = re.search('sprot', label, re.I)
-                    if m:
-                        blast_annot = get_sprot_accession_info(conn=index_conn, accession=ev_row[0], config=config)
-                    else:
-                        raise Exception("ERROR: Expected search index label '{0}' to contain either 'uniref' or 'sprot' in order to know which metadatadb to use.".format(label))
+                blast_annot = get_blast_accession_info(conn=index_conn, accession=ev_row[0], config=config, acc_curs=index_acc_curs, ec_curs=index_ec_curs, go_curs=index_go_curs)
 
                 # is there a class limitation?
                 if blast_class_limit is not None:
@@ -454,6 +443,61 @@ def apply_tmhmm_evidence(polypeptides=None, ev_conn=None, config=None, ev_config
 
     ev_curs.close()
 
+def cache_blast_hit_data(version=None, ref_curs=None, ev_curs=None):
+    """
+    Gets annotation for a specific accession and copies its entry from the large source index into
+    our smaller hits-found-only evidence index.
+    """
+    ref_blast_select_qry = """
+       SELECT e.id, e.full_name, e.organism, e.symbol, ea.accession, ea.res_length, ea.is_characterized
+         FROM entry e 
+              JOIN entry_acc ea on ea.id=e.id
+         WHERE ea.accession = ?
+    """
+
+    ev_blast_insert_qry = "INSERT INTO entry (id, full_name, organism, symbol) VALUES (?, ?, ?, ?)"
+    ev_acc_insert_qry  = "INSERT INTO entry_acc (id, accession, res_length, is_characterized) VALUES (?, ?, ?, ?)"
+
+    ref_go_select_qry = "SELECT id, go_id FROM entry_go WHERE id = ?"
+    ev_go_insert_qry  = "INSERT INTO entry_go (id, go_id) VALUES (?, ?)"
+
+    ref_ec_select_qry = "SELECT id, ec_num FROM entry_ec WHERE id = ?"
+    ev_ec_insert_qry  = "INSERT INTO entry_ec (id, ec_num) VALUES (?, ?)"
+
+    ref_curs.execute(ref_blast_select_qry, (version,))
+    entry_row = ref_curs.fetchone()
+    if entry_row is not None:
+        entry_id = entry_row[0]
+
+        ev_curs.execute(ev_blast_insert_qry, (entry_id, entry_row[1], entry_row[2], entry_row[3]))
+        ev_curs.execute(ev_acc_insert_qry, (entry_id, entry_row[4], entry_row[5], entry_row[6]))
+
+        ref_curs.execute(ref_go_select_qry, (entry_id,))
+        for go_row in ref_curs:
+            ev_curs.execute(ev_go_insert_qry, (entry_id, go_row[1]))
+
+        ref_curs.execute(ref_ec_select_qry, (entry_id,))
+        for ec_row in ref_curs:
+            ev_curs.execute(ev_ec_insert_qry, (entry_id, ec_row[1]))
+
+
+def cache_ev_blast_accessions(idx):
+    """
+    Creates a list of the accession entries whose reference annotation attributes have already
+    been stored within this portable evidence DB.
+    """
+    ev_qry = "SELECT accession FROM entry_acc"
+    ev_curs = idx.cursor()
+    ev_curs.execute(ev_qry)
+
+    accessions = dict()
+    
+    for row in ev_curs:
+        accessions[row[0]] = True
+
+    return accessions
+    
+
 def cache_ev_hmm_version_accessions(idx):
     """
     Creates a list of the HMM version entries whose reference annotation attributes have already
@@ -466,13 +510,12 @@ def cache_ev_hmm_version_accessions(idx):
     versions = dict()
     
     for row in ev_curs:
-        print("Pre-stored version: {0}".format(row[0]))
         versions[row[0]] = True
 
     return versions
     
 
-def cache_hmm_hit_data(version=None, ev_index=None, ref_index=None):
+def cache_hmm_hit_data(version=None, ev_curs=None, ref_curs=None):
     """
     Checks to see if annotation for that HMM is stored within the evidence index.  If not,
     the relevant entries from the reference are copied.
@@ -500,23 +543,14 @@ def cache_hmm_hit_data(version=None, ev_index=None, ref_index=None):
 
     ev_go_insert_qry = "INSERT INTO hmm_go (id, hmm_id, go_id) VALUES (?, ?, ?)"
 
-    ref_curs = ref_index.cursor()
-    ev_curs = ev_index.cursor()
-    ref_go_curs = ref_index.cursor()
-
     ref_curs.execute(ref_qry, (version,))
     hmm_row = ref_curs.fetchone()
     if hmm_row is not None:
         ev_curs.execute(ev_qry, hmm_row)
-        ref_go_curs.execute(ref_go_select_qry, (hmm_row[0],))
+        ref_curs.execute(ref_go_select_qry, (hmm_row[0],))
 
-        for hmm_go_row in ref_go_curs:
+        for hmm_go_row in ref_curs:
             ev_curs.execute(ev_go_insert_qry, hmm_go_row)
-
-    ref_go_curs.close()
-    ref_curs.close()
-    ev_curs.close()
-
 
 def check_configuration(conf, userargs):
     """
@@ -557,73 +591,41 @@ def check_configuration(conf, userargs):
         if not os.path.exists(conf['indexes'][label]):
             raise Exception("ERROR: Index with label:{0} and path:{1} couldn't be found".format(label, conf['indexes'][label]))
 
-def get_sprot_accession_info(conn=None, accession=None, config=None):
-    curs = conn.cursor()
-    ec_curs = conn.cursor()
-    go_curs = conn.cursor()
+def get_blast_accession_info(conn=None, accession=None, config=None, acc_curs=None, ec_curs=None, go_curs=None):
     annot = biocode.annotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
 
     # First we need to get the ID from the accession
     qry = """
-          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length
-          FROM uniprot_sprot u
-               JOIN uniprot_sprot_acc ua ON u.id=ua.id
-          WHERE ua.accession = ?
+          SELECT e.id, ea.accession, e.full_name, e.symbol, ea.res_length, ea.is_characterized
+          FROM entry e
+               JOIN entry_acc ea ON e.id=ea.id
+          WHERE ea.accession = ?
           """
 
-    # accession is in the format: sp|A4YVG3|RRF_BRASO
-    abbrev, sprot_acc, sprot_id = accession.split('|')
-    
-    for row in curs.execute(qry, (sprot_acc,)):
-        sprot_id = row[0]
-        annot.product_name = row[2]
-        annot.gene_symbol = row[3]
-        annot.other_attributes['ref_len'] = row[4]
-
-        qry = "SELECT ec_num FROM uniprot_sprot_ec WHERE id = ?"
-        for ec_row in ec_curs.execute(qry, (sprot_id,)):
-            annot.add_ec_number( biocode.annotation.ECAnnotation(number=ec_row[0]) )
-
-        qry = "SELECT go_id FROM uniprot_sprot_go WHERE id = ?"
-        for go_row in go_curs.execute(qry, (sprot_id,)):
-            annot.add_go_annotation( biocode.annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
-
-    curs.close()
-    ec_curs.close()
-    go_curs.close()
-    return annot
-
-def get_uniref_accession_info(conn=None, accession=None, config=None, acc_curs=None, ec_curs=None, go_curs=None):
-    annot = biocode.annotation.FunctionalAnnotation(product_name=config['general']['default_product_name'])
-
-    if accession.startswith('UniRef100_'):
+    # SWISS-PROT accessions are in the format: sp|A4YVG3|RRF_BRASO
+    if accession.startswith('sp|'):
+        abbrev, accession, sprot_id = accession.split('|')
+    elif accession.startswith('UniRef100_'):
         accession = accession.lstrip('UniRef100_')
-
-    # First we need to get the ID from the accession
-    qry = """
-          SELECT u.id, ua.accession, u.full_name, u.symbol, ua.res_length, ua.is_characterized
-          FROM uniref u
-               JOIN uniref_acc ua ON u.id=ua.id
-          WHERE ua.accession = ?
-          """
-
+    
     for row in acc_curs.execute(qry, (accession,)):
-        uniref_id = row[0]
+        entry_id = row[0]
         annot.product_name = row[2]
         annot.gene_symbol = row[3]
         annot.other_attributes['ref_len'] = row[4]
         annot.other_attributes['is_characterized'] = row[5]
 
-        qry = "SELECT ec_num FROM uniref_ec WHERE id = ?"
-        for ec_row in ec_curs.execute(qry, (uniref_id,)):
+        qry = "SELECT ec_num FROM entry_ec WHERE id = ?"
+        for ec_row in ec_curs.execute(qry, (entry_id,)):
             annot.add_ec_number( biocode.annotation.ECAnnotation(number=ec_row[0]) )
 
-        qry = "SELECT go_id FROM uniref_go WHERE id = ?"
-        for go_row in go_curs.execute(qry, (uniref_id,)):
+        qry = "SELECT go_id FROM entry_go WHERE id = ?"
+        for go_row in go_curs.execute(qry, (entry_id,)):
             annot.add_go_annotation( biocode.annotation.GOAnnotation(go_id=go_row[0], with_from=row[1]) )
 
     return annot
-        
+
+
 def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None, label=None,
                                  db_conn=None, output_base=None):
     """
@@ -676,7 +678,7 @@ def get_or_create_db_connections(type_ev=None, configuration=None, evidence=None
             hmm_ev_db_curs.execute("CREATE INDEX hmm_hit__qry_id ON hmm_hit (qry_id)")
             hmm_ev_db_curs.close()
         elif type_ev == 'blast_ev':
-            index_rapsearch2_m8(path=evidence[label]['path'], index=ev_db_conn)
+            index_rapsearch2_m8(path=evidence[label]['path'], ev_index=ev_db_conn, ref_index=index_conn)
             ev_db_conn.commit()
             blast_ev_db_curs = ev_db_conn.cursor()
             blast_ev_db_curs.execute("DROP INDEX IF EXISTS blast_hit__qry_id")
@@ -715,7 +717,8 @@ def get_files_from_path(path):
     return paths
         
 def index_hmmer3_htab(path=None, index=None, ev_index=None, ref_index=None):
-    curs = ev_index.cursor()
+    ev_curs = ev_index.cursor()
+    ref_curs = ref_index.cursor()
     parsing_errors = 0
 
     qry = """
@@ -750,17 +753,17 @@ def index_hmmer3_htab(path=None, index=None, ev_index=None, ref_index=None):
                         parsing_errors += 1
                         cols[i] = None
                 
-            curs.execute(qry, (cols[5], cols[8], cols[9], cols[0], int(cols[2]), cols[6], cols[7], 
+            ev_curs.execute(qry, (cols[5], cols[8], cols[9], cols[0], int(cols[2]), cols[6], cols[7], 
                                cols[11], float(cols[12]), float(cols[17]), float(cols[18]), float(cols[23]),
                                float(cols[21]), float(cols[22]), float(cols[24]), cols[19], cols[20]))
 
             if cols[0] not in hmm_versions_found:
-                print("DEBUG: Attempting to cache hmm_hit_data for accession: {0}".format(cols[0]))
-                cache_hmm_hit_data(version=cols[0], ev_index=ev_index, ref_index=ref_index)
+                cache_hmm_hit_data(version=cols[0], ev_curs=ev_index, ref_curs=ref_curs)
                 hmm_versions_found[cols[0]] = True
 
-    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
-    curs.close()
+    ev_curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    ev_curs.close()
+    ref_curs.close()
 
     if parsing_errors > 0:
         print("WARN: There were {0} parsing errors (columns converted to None) when processing {1}\n".format(parsing_errors, path))
@@ -800,8 +803,9 @@ def index_lipoprotein_motif(path=None, index=None):
     curs.close()
                 
         
-def index_rapsearch2_m8(path=None, index=None):
-    curs = index.cursor()
+def index_rapsearch2_m8(path=None, ev_index=None, ref_index=None):
+    ref_curs = ref_index.cursor()
+    ev_curs  = ev_index.cursor()
     parsing_errors = 0
 
     # The E-value column can be either the E-value directly or log(E-value), depending on
@@ -815,6 +819,7 @@ def index_rapsearch2_m8(path=None, index=None):
     """
 
     paths = get_files_from_path(path)
+    accessions_found = cache_ev_blast_accessions(ev_index)
     
     for file in paths:
         print("INFO: parsing: {0}".format(file))
@@ -841,12 +846,24 @@ def index_rapsearch2_m8(path=None, index=None):
                     print("WARN: Skipping a RAPSearch2 row:  overflow error converting E-value ({0}) on line: {1}".format(cols[10], line))
                     parsing_errors += 1
                     continue
+
+            accession = cols[1]
+
+            if accession.startswith('sp|'):
+                abbrev, accession, sprot_id = accession.split('|')
+            elif accession.startswith('UniRef100_'):
+                accession = accession.lstrip('UniRef100_')
                 
-            curs.execute(qry, (cols[0], cols[1], int(cols[3]), int(cols[6]), int(cols[7]), int(cols[8]),
+            ev_curs.execute(qry, (cols[0], accession, int(cols[3]), int(cols[6]), int(cols[7]), int(cols[8]),
                                int(cols[9]), float(cols[2]), cols[10], float(cols[11])))
 
-    curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
-    curs.close()
+            if cols[1] not in accessions_found:
+                cache_blast_hit_data(version=accession, ev_curs=ev_curs, ref_curs=ref_curs)
+                accessions_found[cols[1]] = True
+
+    ev_curs.execute("INSERT INTO data_sources (source_path) VALUES (?)", (path,))
+    ev_curs.close()
+
     if parsing_errors > 0:
         print("WARN: There were {0} parsing errors (match rows skipped) when processing {1}\n".format(parsing_errors, path))
 
@@ -977,6 +994,38 @@ def initialize_blast_results_db(conn):
             eval              real,
             bit_score         real
         )
+    """)
+
+    curs.execute("""
+              CREATE TABLE entry (
+                 id                text primary key,
+                 full_name         text,
+                 organism          text,
+                 symbol            text
+              )
+    """)
+    
+    curs.execute("""
+              CREATE TABLE entry_acc (
+                 id         text not NULL,
+                 accession  text not NULL,
+                 res_length integer,
+                 is_characterized integer DEFAULT 0
+              )
+    """)
+    
+    curs.execute("""
+              CREATE TABLE entry_go (
+                 id     text not NULL,
+                 go_id  text not NULL
+              )
+    """)
+
+    curs.execute("""
+              CREATE TABLE entry_ec (
+                 id     text not NULL,
+                 ec_num text not NULL
+              )
     """)
 
     curs.execute("""
