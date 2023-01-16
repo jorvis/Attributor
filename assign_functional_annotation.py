@@ -42,7 +42,7 @@ def main():
 
     sources_log_fh = open("{0}.sources.log".format(args.output_base), 'wt')
 
-    configuration = yaml.load(open(args.config_file).read())
+    configuration = yaml.safe_load(open(args.config_file).read())
     check_configuration(configuration, args)
     evidence = parse_evidence_config(configuration)
     default_product_name = configuration['general']['default_product_name']
@@ -1210,7 +1210,7 @@ def parse_evidence_config(conf):
         else:
             ev[label] = dict()
             for key in entry:
-                if key is not 'label':
+                if key != 'label':
                     ev[label][key] = entry[key]
 
     return ev
